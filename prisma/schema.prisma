@@ -1,0 +1,167 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// One record per MLB player referenced by any bet.
+/// Multiple bets on the same player share this row (spec §12).
+model Player {
+  id           Int      @id // MLB player ID (people.id)
+  fullName     String
+  teamId       Int?
+  teamName     String?
+  teamAbbrev   String?
+  position     String? // abbreviation, e.g. "RF", "P"
+  positionType String? // "Pitcher" | "Hitter" | "Outfielder" | "Infielder" | "Catcher" | "Two-Way Player"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  bets Bet[]
+}
+
+/// One record per MLB game referenced by any bet.
+/// The polling manager keys off gamePk so N bets in one game => ONE feed request (spec §27).
+model Game {
+  gamePk       Int      @id
+  gameDate     DateTime
+  officialDate String
+  status       String // "Preview" | "Live" | "Final"
+  detailedState String?
+  homeTeamId   Int
+  homeName     String
+  homeAbbrev   String
+  awayTeamId   Int
+  awayName     String
+  awayAbbrev   String
+  homeScore    Int?
+  awayScore    Int?
+  inning       Int?
+  inningState  String?
+  outs         Int?
+  balls        Int?
+  strikes      Int?
+
+  /// Runners on base, for the diamond on the card.
+  onFirst  Boolean @default(false)
+  onSecond Boolean @default(false)
+  onThird  Boolean @default(false)
+
+  /// Who is on the mound right now.
+  currentPitcherId   Int?
+  currentPitcherName String?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  bets Bet[]
+}
+
+/// A bet slip: one or more legs that must ALL hit. A straight single bet is
+/// just a one-leg slip, so the dashboard can render everything the same way.
+model Parlay {
+  id     String @id @default(cuid())
+  name   String?
+  source String @default("manual")
+
+  odds  Int?
+  stake Float?
+  /// Total return if the slip wins, entered directly. Takes precedence over
+  /// `odds` for profit maths -- a book's quoted payout is the source of truth.
+  payout Float?
+
+  status String @default("PENDING") // PENDING | LIVE | WON | LOST
+
+  /// Live estimated chance every remaining leg hits, 0..1. Recomputed each poll.
+  winProbability Float?
+
+  settledAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  bets    Bet[]
+  history ParlayPoint[]
+}
+
+/// One sample of a slip's win probability, so the card can draw where the
+/// number has been and say what moved it.
+model ParlayPoint {
+  id          String   @id @default(cuid())
+  parlayId    String
+  probability Float
+  /// Short human explanation of the move, e.g. "Soto +1 Total Bases".
+  reason      String?
+  /// JSON map of betId -> currentValue at this sample, used to diff the next one.
+  legValues   String
+  createdAt   DateTime @default(now())
+
+  parlay Parlay @relation(fields: [parlayId], references: [id], onDelete: Cascade)
+
+  @@index([parlayId, createdAt])
+}
+
+model Bet {
+  id     String @id @default(cuid())
+
+  playerId Int
+  gamePk   Int
+  teamId   Int
+
+  betType   String // PropKey, e.g. "HITS" | "TOTAL_BASES" | "FANTASY_POINTS" | "PITCHER_STRIKEOUTS"
+  source    String @default("manual") // "manual" | "underdog" | "draftkings" | "fanduel"
+  direction String // "OVER" | "UNDER"
+  line      Float
+
+  odds  Int?
+  stake Float?
+
+  status       String @default("PENDING") // PENDING | LIVE | WON | LOST | PUSH | VOID
+  currentValue Float  @default(0)
+  progress     Float  @default(0)
+
+  /// Live estimated chance this leg hits, 0..1. Recomputed each poll.
+  winProbability Float?
+  /// Opportunities the player is projected to have left (PA, or batters faced).
+  chancesLeft    Float?
+
+  /// Slip this leg belongs to. Every bet gets one, even a straight single.
+  parlayId String?
+
+  /// JSON blob of the player's full live stat line at last evaluation, so bet
+  /// cards can render component stats (AB/H/HR/RBI/R) without a refetch.
+  statsSnapshot String?
+  /// Batting status badge: AT_BAT | ON_DECK | COMING_UP | BATTERS_AWAY | ...
+  battingStatus String?
+  /// Hitters until this player's spot, when battingStatus is BATTERS_AWAY.
+  battersAway   Int?
+  /// Half-inning this hitter is projected to bat in next.
+  expectedInning Int?
+  expectedHalf   String?
+  /// Innings a pitcher is projected to still throw, and the reasoning behind it.
+  expectedInningsLeft Float?
+  workloadNote        String?
+  shortLeash          Boolean @default(false)
+
+  settledAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  player Player  @relation(fields: [playerId], references: [id])
+  game   Game    @relation(fields: [gamePk], references: [gamePk])
+  parlay Parlay? @relation(fields: [parlayId], references: [id], onDelete: Cascade)
+
+  @@index([gamePk])
+  @@index([status])
+  @@index([parlayId])
+}
+
+/// Single-row key/value store for app settings (polling interval, fantasy
+/// scoring configs, display prefs). Values are JSON strings.
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
