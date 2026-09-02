@@ -6,6 +6,7 @@ import { LiveBets } from './components/LiveBets';
 import { AddBet } from './components/AddBet';
 import { History } from './components/History';
 import { SettingsScreen } from './components/SettingsScreen';
+import { Login } from './components/Login';
 
 type Screen = 'live' | 'add' | 'history' | 'settings';
 
@@ -41,6 +42,8 @@ export function App() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [connected, setConnected] = useState(socket.connected);
   const [error, setError] = useState<string | null>(null);
+  /** null while we're still asking the server whether a session is needed. */
+  const [authed, setAuthed] = useState<boolean | null>(null);
 
   const propMap = useMemo(() => new Map(propDefs.map((p) => [p.key, p])), [propDefs]);
 
@@ -50,15 +53,35 @@ export function App() {
       .catch((err) => setError((err as Error).message));
   }, []);
 
+  // Ask first, so a protected instance shows a login box instead of a wall
+  // of failed requests.
   useEffect(() => {
+    const expired = () => { setAuthed(false); socket.disconnect(); };
+    window.addEventListener('auth:expired', expired);
+    return () => window.removeEventListener('auth:expired', expired);
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/session')
+      .then((r) => r.json())
+      .then((s) => setAuthed(!s.authRequired || s.authenticated))
+      .catch(() => setAuthed(true));
+  }, []);
+
+  useEffect(() => {
+    if (!authed) return;
     loadParlays();
     api.propCatalog().then(({ props }) => setPropDefs(props)).catch(() => {});
     api.getSettings().then(({ settings }) => setSettings(settings)).catch(() => {});
-  }, [loadParlays]);
+  }, [authed, loadParlays]);
 
   // Live push from the server after every poll -- the page never needs a
   // manual refresh.
   useEffect(() => {
+    if (!authed) return;
+    // The socket handshake carries the session cookie; reconnect once we have one.
+    if (!socket.connected) socket.connect();
+
     const onConnect = () => { setConnected(true); loadParlays(); };
     const onDisconnect = () => setConnected(false);
     const onParlays = (updated: Parlay[]) => setParlays((prev) => mergeParlays(prev, updated));
@@ -81,7 +104,7 @@ export function App() {
       socket.off('parlays:update', onParlays);
       socket.off('game:update', onGame);
     };
-  }, [loadParlays]);
+  }, [authed, loadParlays]);
 
   async function removeParlay(id: string) {
     const previous = parlays;
@@ -112,6 +135,11 @@ export function App() {
   const dashboard = settings?.keepSettledOnDashboard === false
     ? parlays.filter((p) => !settledStatuses.includes(p.status))
     : parlays;
+
+  if (authed === null) {
+    return <div className="app boot"><span className="spinner" /></div>;
+  }
+  if (!authed) return <Login onAuthed={() => setAuthed(true)} />;
 
   return (
     <div className={`app${settings?.tvMode ? ' tv' : ''}`}>

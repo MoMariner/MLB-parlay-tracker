@@ -12,6 +12,7 @@ import { parlaysRouter } from './routes/parlays.js';
 import { settingsRouter } from './routes/settings.js';
 import { loadSettings } from './services/settings.js';
 import { attachSocket, syncPollers, stopAll } from './services/gamePollingManager.js';
+import { authRequired, isAuthed, passwordMatches, requireAuth, setSessionCookie, clearSessionCookie } from './auth.js';
 
 const PORT = Number(process.env.PORT ?? 4000);
 
@@ -24,6 +25,28 @@ const io = new SocketServer(httpServer, { cors: { origin: '*' } });
 app.use(cors());
 app.use(express.json());
 
+// --- session endpoints (public, so the login box can talk to them) ---
+app.get('/api/session', (req, res) => {
+  res.json({ authRequired, authenticated: isAuthed(req) });
+});
+
+app.post('/api/login', (req, res) => {
+  if (!authRequired) return res.json({ authenticated: true });
+  if (!passwordMatches(req.body?.password)) {
+    return res.status(401).json({ error: 'Wrong password' });
+  }
+  setSessionCookie(res);
+  res.json({ authenticated: true });
+});
+
+app.post('/api/logout', (req, res) => {
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+// Everything past here needs a session when a password is configured.
+app.use('/api', requireAuth);
+
 app.use('/api/players', playersRouter);
 app.use('/api/games', gamesRouter);
 app.use('/api/bets', betsRouter);
@@ -33,6 +56,12 @@ app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 // Serve the built client in production; in dev, Vite proxies to this server.
 app.use(express.static('dist/client'));
+
+// The live feed carries the same data as the API, so it needs the same gate.
+io.use((socket, next) => {
+  if (isAuthed({ headers: { cookie: socket.handshake.headers.cookie } })) return next();
+  next(new Error('unauthorized'));
+});
 
 attachSocket(io);
 
@@ -56,8 +85,11 @@ async function main() {
   await syncPollers();
 
   httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n  MLB Live Bet Tracker API on http://localhost:${PORT}`);
+    console.log(`\n  MLB Live Bet Tracker on http://localhost:${PORT}`);
     for (const ip of lanAddresses()) console.log(`  LAN: http://${ip}:${PORT}`);
+    console.log(authRequired
+      ? '  Password protection: ON'
+      : '  Password protection: OFF (set APP_PASSWORD to enable)');
     console.log('');
   });
 }

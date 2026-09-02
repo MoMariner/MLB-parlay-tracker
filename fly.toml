@@ -1,0 +1,28 @@
+# Fly.io deployment. The tracker polls MLB continuously, so the machine must
+# stay up rather than sleeping between requests.
+app = "mlb-parlay-tracker"
+primary_region = "iad"
+
+[build]
+
+[env]
+  PORT = "8080"
+  # SQLite lives on the mounted volume so bets survive redeploys.
+  DATABASE_URL = "file:/data/dev.db"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # A sleeping machine stops polling and loses live tracking, which is the
+  # whole point of the app.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[mounts]]
+  source = "mlb_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

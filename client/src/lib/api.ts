@@ -6,6 +6,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   });
   const body = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    // Session expired or was cleared; a reload lands on the login box.
+    window.dispatchEvent(new CustomEvent('auth:expired'));
+  }
   if (!res.ok) {
     const err = new Error((body as any).error ?? `Request failed (${res.status})`);
     (err as any).code = (body as any).code;
