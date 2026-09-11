@@ -1,11 +1,22 @@
-/** Schedule + single-game lookup (spec §3, §19). */
+/** Schedules, slates and single-game lookup. */
 
 import { Router } from 'express';
 import { getSchedule, getGameFeed, isoDate } from '../services/mlbApi.js';
 import { extractGameSnapshot } from '../services/statExtractor.js';
 import { buildDemoFeed, isDemoGame } from '../services/demoMode.js';
+import { nflGetSlate, nflGetSummary } from '../nfl/espnApi.js';
+import { extractNflSnapshot } from '../nfl/stats.js';
 
 export const gamesRouter = Router();
+
+/** This week's NFL games with market totals and spreads, for game-line bets. */
+gamesRouter.get('/nfl/slate', async (_req, res) => {
+  try {
+    res.json({ games: await nflGetSlate() });
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message });
+  }
+});
 
 gamesRouter.get('/', async (req, res) => {
   const start = String(req.query.startDate ?? req.query.date ?? isoDate(0));
@@ -22,6 +33,9 @@ gamesRouter.get('/:gamePk', async (req, res) => {
   const gamePk = Number(req.params.gamePk);
   if (!Number.isFinite(gamePk)) return res.status(400).json({ error: 'Invalid gamePk' });
   try {
+    if (req.query.sport === 'nfl') {
+      return res.json({ game: extractNflSnapshot(await nflGetSummary(gamePk)) });
+    }
     const feed = isDemoGame(gamePk) ? buildDemoFeed() : await getGameFeed(gamePk);
     res.json({ game: extractGameSnapshot(feed) });
   } catch (err) {

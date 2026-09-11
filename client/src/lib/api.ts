@@ -1,4 +1,6 @@
-import type { AppSettings, Bet, MlbGame, MlbPlayer, Parlay, PropDef, PropGroup, ScoringFormat } from './types';
+import type {
+  AppSettings, Bet, MlbGame, MlbPlayer, NflScoring, Parlay, PropDef, PropGroup, ScoringFormat, Sport,
+} from './types';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -19,17 +21,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+interface ApiHealth { ok: boolean; latencyMs: number; error?: string }
+
 export const api = {
-  searchPlayers: (q: string, signal?: AbortSignal) =>
-    request<{ players: MlbPlayer[] }>(`/api/players/search?q=${encodeURIComponent(q)}`, { signal }),
+  searchPlayers: (q: string, sport: Sport = 'mlb', signal?: AbortSignal) =>
+    request<{ players: MlbPlayer[] }>(`/api/players/search?q=${encodeURIComponent(q)}&sport=${sport}`, { signal }),
 
-  playerGames: (playerId: number) =>
-    request<{ games: MlbGame[] }>(`/api/players/${playerId}/games`),
+  playerGames: (playerId: number, sport: Sport = 'mlb') =>
+    request<{ games: MlbGame[] }>(`/api/players/${playerId}/games?sport=${sport}`),
 
-  playerProps: (playerId: number) =>
+  playerProps: (playerId: number, sport: Sport = 'mlb') =>
     request<{ position: string | null; positionType: string | null; categories: PropGroup[] }>(
-      `/api/players/${playerId}/props`,
+      `/api/players/${playerId}/props?sport=${sport}`,
     ),
+
+  /** This week's NFL games, with market totals and spreads. */
+  nflSlate: () => request<{ games: MlbGame[] }>('/api/games/nfl/slate'),
 
   propCatalog: () => request<{ props: PropDef[]; sources: { key: string; label: string }[] }>('/api/bets/props'),
 
@@ -60,25 +67,37 @@ export const api = {
     request<{ ok: true; parlay: Parlay | null }>(`/api/parlays/${parlayId}/legs/${betId}`, { method: 'DELETE' }),
 
   getSettings: () =>
-    request<{ settings: AppSettings; scoring: Record<string, ScoringFormat>; defaultScoring: Record<string, ScoringFormat> }>(
-      '/api/settings',
-    ),
+    request<{
+      settings: AppSettings;
+      scoring: Record<string, ScoringFormat>;
+      defaultScoring: Record<string, ScoringFormat>;
+      nflScoring: Record<string, NflScoring>;
+      defaultNflScoring: Record<string, NflScoring>;
+    }>('/api/settings'),
 
   patchSettings: (patch: Partial<AppSettings>) =>
     request<{ settings: AppSettings }>('/api/settings', { method: 'PATCH', body: JSON.stringify(patch) }),
 
-  putScoring: (scoring: Record<string, ScoringFormat>) =>
-    request<{ scoring: Record<string, ScoringFormat> }>('/api/settings/scoring', {
-      method: 'PUT', body: JSON.stringify({ scoring }),
+  putScoring: <T = ScoringFormat>(scoring: Record<string, T>, sport: Sport = 'mlb') =>
+    request<{ scoring: Record<string, T> }>('/api/settings/scoring', {
+      method: 'PUT', body: JSON.stringify({ scoring, sport }),
     }),
 
-  resetScoring: () =>
-    request<{ scoring: Record<string, ScoringFormat> }>('/api/settings/scoring/reset', { method: 'POST' }),
+  resetScoring: <T = ScoringFormat>(sport: Sport = 'mlb') =>
+    request<{ scoring: Record<string, T> }>(`/api/settings/scoring/reset?sport=${sport}`, { method: 'POST' }),
 
   status: () =>
     request<{
-      mlb: { ok: boolean; latencyMs: number; error?: string };
-      polling: { activeGames: number; feedRequests: number; games: { gamePk: number; intervalMs: number; status: string | null; lastPolledAt: number | null; lastError: string | null }[] };
+      mlb: ApiHealth;
+      nfl: ApiHealth;
+      polling: {
+        activeGames: number;
+        feedRequests: number;
+        games: {
+          gameKey: string; sport: Sport; gamePk: number; intervalMs: number;
+          status: string | null; lastPolledAt: number | null; lastError: string | null;
+        }[];
+      };
       settings: AppSettings;
     }>('/api/settings/status'),
 };

@@ -5,6 +5,7 @@
 
 import { prisma } from '../db.js';
 import { DEFAULT_SCORING, setScoringConfigs, getScoringConfigs, type ScoringFormat } from './fantasyScoring.js';
+import { DEFAULT_NFL_SCORING, setNflScoringConfigs, getNflScoringConfigs, type NflScoring } from '../nfl/fantasy.js';
 
 export interface AppSettings {
   /** Poll cadence for games that are in progress, in ms. */
@@ -55,6 +56,9 @@ export async function loadSettings(): Promise<AppSettings> {
   // Merge so a format added in a later release still shows up for existing users.
   setScoringConfigs({ ...DEFAULT_SCORING, ...scoring });
 
+  const nflScoring = await readKey<Record<string, NflScoring>>('scoring_nfl', DEFAULT_NFL_SCORING);
+  setNflScoringConfigs({ ...DEFAULT_NFL_SCORING, ...nflScoring });
+
   return cached;
 }
 
@@ -78,4 +82,14 @@ export async function resetScoring(): Promise<Record<string, ScoringFormat>> {
   return saveScoring(structuredClone(DEFAULT_SCORING));
 }
 
-export { getScoringConfigs };
+export async function saveNflScoring(next: Record<string, NflScoring>): Promise<Record<string, NflScoring>> {
+  setNflScoringConfigs(next);
+  await writeKey('scoring_nfl', next);
+  return next;
+}
+
+export async function resetNflScoring(): Promise<Record<string, NflScoring>> {
+  return saveNflScoring(structuredClone(DEFAULT_NFL_SCORING));
+}
+
+export { getScoringConfigs, getNflScoringConfigs };

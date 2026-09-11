@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
-import type { MlbPlayer } from '../lib/types';
+import type { MlbPlayer, Sport } from '../lib/types';
 import { PlayerPhoto } from './PlayerPhoto';
 
 /**
- * Spec §1 -- type a name, pick a player. Debounced at 300ms and every stale
- * request is aborted, so a fast typist makes one API call, not eight.
+ * Type a name, pick a player. Debounced at 300ms and every stale request is
+ * aborted, so a fast typist makes one API call, not eight.
  */
-export function PlayerSearch({ onSelect }: { onSelect: (p: MlbPlayer) => void }) {
+export function PlayerSearch({ onSelect, sport = 'mlb' }: { onSelect: (p: MlbPlayer) => void; sport?: Sport }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<MlbPlayer[]>([]);
   const [loading, setLoading] = useState(false);
@@ -34,7 +34,7 @@ export function PlayerSearch({ onSelect }: { onSelect: (p: MlbPlayer) => void })
 
     const timer = setTimeout(async () => {
       try {
-        const { players } = await api.searchPlayers(q, controller.signal);
+        const { players } = await api.searchPlayers(q, sport, controller.signal);
         setResults(players);
         setError(null);
       } catch (err) {
@@ -45,17 +45,19 @@ export function PlayerSearch({ onSelect }: { onSelect: (p: MlbPlayer) => void })
     }, 300);
 
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [query]);
+  }, [query, sport]);
+
+  const league = sport.toUpperCase();
 
   return (
     <div>
       <div className="field">
-        <label htmlFor="player-search">SEARCH PLAYERS</label>
+        <label htmlFor="player-search">SEARCH {league} PLAYERS</label>
         <input
           id="player-search"
           ref={inputRef}
           className="input"
-          placeholder="Search players..."
+          placeholder={sport === 'nfl' ? 'e.g. Stafford, Nacua, McCaffrey' : 'e.g. Judge, Ohtani, Witt'}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           autoComplete="off"
@@ -66,7 +68,7 @@ export function PlayerSearch({ onSelect }: { onSelect: (p: MlbPlayer) => void })
 
       {loading && (
         <div style={{ marginTop: 18, color: 'var(--muted)', display: 'flex', gap: 10, alignItems: 'center' }}>
-          <span className="spinner" /> Searching MLB…
+          <span className="spinner" /> Searching {league}…
         </div>
       )}
 
@@ -82,7 +84,7 @@ export function PlayerSearch({ onSelect }: { onSelect: (p: MlbPlayer) => void })
             onClick={() => onSelect(p)}
             aria-label={`${p.fullName}, ${p.teamName ?? 'free agent'}${p.position ? `, ${p.position}` : ''}`}
           >
-            <PlayerPhoto playerId={p.id} size="sm" alt={p.fullName} />
+            <PlayerPhoto playerId={p.id} size="sm" alt={p.fullName} sport={sport} />
             <span className="who">
               <span className="nm">{p.fullName}</span>
               <span className="tm">{p.teamName ?? 'Free Agent'}</span>

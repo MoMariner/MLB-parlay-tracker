@@ -13,7 +13,9 @@
     "db:generate": "prisma generate",
     "postinstall": "prisma generate",
     "verify": "tsx scripts/verify.mts",
-    "replay": "tsx scripts/replay.mts"
+    "replay": "tsx scripts/replay.mts",
+    "nfl-boxscore": "tsx scripts/nfl-boxscore.mts",
+    "nfl-verify": "tsx scripts/nfl-verify.mts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import type { AppSettings, ScoringFormat } from '../lib/types';
+import type { AppSettings, NflScoring, ScoringFormat, Sport } from '../lib/types';
 
-/** Spec §25 -- API status, polling, fantasy scoring, display. */
 /** camelCase scoring key -> readable label, keeping baseball acronyms upright. */
 function statLabel(key: string): string {
   const words = key.replace(/([A-Z])/g, ' $1').trim().split(' ');
@@ -11,10 +10,29 @@ function statLabel(key: string): string {
     .join(' ');
 }
 
+const NFL_STAT_LABELS: Record<string, string> = {
+  passYard: 'Passing yard',
+  passTouchdown: 'Passing TD',
+  interception: 'Interception',
+  rushYard: 'Rushing yard',
+  rushTouchdown: 'Rushing TD',
+  reception: 'Reception',
+  recYard: 'Receiving yard',
+  recTouchdown: 'Receiving TD',
+  fumbleLost: 'Fumble lost',
+  returnTouchdown: 'Return TD',
+  bonus300PassYards: '300+ pass yds bonus',
+  bonus100RushYards: '100+ rush yds bonus',
+  bonus100RecYards: '100+ rec yds bonus',
+};
+
+/** API health, polling cadence, fantasy scoring for both sports, display. */
 export function SettingsScreen({
   settings, onSettings,
 }: { settings: AppSettings | null; onSettings: (s: AppSettings) => void }) {
   const [scoring, setScoring] = useState<Record<string, ScoringFormat>>({});
+  const [nflScoring, setNflScoring] = useState<Record<string, NflScoring>>({});
+  const [scoringSport, setScoringSport] = useState<Sport>('mlb');
   const [activeFormat, setActiveFormat] = useState('underdog');
   const [status, setStatus] = useState<Awaited<ReturnType<typeof api.status>> | null>(null);
   const [saving, setSaving] = useState(false);
@@ -22,7 +40,9 @@ export function SettingsScreen({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.getSettings().then(({ scoring }) => setScoring(scoring)).catch((e) => setError((e as Error).message));
+    api.getSettings()
+      .then(({ scoring, nflScoring }) => { setScoring(scoring); setNflScoring(nflScoring ?? {}); })
+      .catch((e) => setError((e as Error).message));
   }, []);
 
   useEffect(() => {
@@ -41,22 +61,35 @@ export function SettingsScreen({
     } catch (e) { setError((e as Error).message); }
   }
 
+  function flash(text: string) {
+    setMessage(text);
+    setTimeout(() => setMessage(null), 4000);
+  }
+
   async function saveScoring() {
     setSaving(true);
     try {
-      const { scoring: saved } = await api.putScoring(scoring);
-      setScoring(saved);
-      setMessage('Scoring saved — open bets re-score on the next poll.');
+      if (scoringSport === 'nfl') {
+        const { scoring: saved } = await api.putScoring<NflScoring>(nflScoring, 'nfl');
+        setNflScoring(saved);
+      } else {
+        const { scoring: saved } = await api.putScoring(scoring);
+        setScoring(saved);
+      }
+      flash('Scoring saved — open bets re-score on the next poll.');
       setError(null);
-      setTimeout(() => setMessage(null), 4000);
     } catch (e) { setError((e as Error).message); } finally { setSaving(false); }
   }
 
   async function reset() {
-    const { scoring: fresh } = await api.resetScoring();
-    setScoring(fresh);
-    setMessage('Scoring reset to defaults.');
-    setTimeout(() => setMessage(null), 4000);
+    if (scoringSport === 'nfl') {
+      const { scoring: fresh } = await api.resetScoring<NflScoring>('nfl');
+      setNflScoring(fresh);
+    } else {
+      const { scoring: fresh } = await api.resetScoring();
+      setScoring(fresh);
+    }
+    flash('Scoring reset to defaults.');
   }
 
   function editValue(group: 'batting' | 'pitching', stat: string, raw: string) {
@@ -69,12 +102,21 @@ export function SettingsScreen({
     }));
   }
 
+  function editNflValue(stat: string, raw: string) {
+    setNflScoring((prev) => ({
+      ...prev,
+      [activeFormat]: { ...prev[activeFormat], [stat]: raw === '' || raw === '-' ? 0 : Number(raw) },
+    }));
+  }
+
   const format = scoring[activeFormat];
+  const nflFormat = nflScoring[activeFormat];
+  const tabs: Record<string, { label: string }> = scoringSport === 'nfl' ? nflScoring : scoring;
 
   return (
     <div>
       <h1 className="h1">SETTINGS</h1>
-      <p className="sub">API health, polling cadence, fantasy scoring and display.</p>
+      <p className="sub">Data sources, polling cadence, fantasy scoring and display.</p>
 
       {error && <div className="error-box">{error}</div>}
       {message && (
@@ -83,13 +125,19 @@ export function SettingsScreen({
 
       <div className="settings-grid" style={{ marginBottom: 18 }}>
         <div className="panel">
-          <h2 className="section-title">MLB API STATUS</h2>
+          <h2 className="section-title">DATA SOURCES</h2>
           {status ? (
             <>
-              <span className={`status-pill ${status.mlb.ok ? 'ok' : 'bad'}`}>
-                {status.mlb.ok ? '● CONNECTED' : '● UNREACHABLE'} · {status.mlb.latencyMs}ms
-              </span>
-              {status.mlb.error && <div style={{ color: 'var(--lose)', marginTop: 10, fontSize: 13 }}>{status.mlb.error}</div>}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <span className={`status-pill ${status.mlb.ok ? 'ok' : 'bad'}`}>
+                  ⚾ MLB {status.mlb.ok ? 'CONNECTED' : 'UNREACHABLE'} · {status.mlb.latencyMs}ms
+                </span>
+                <span className={`status-pill ${status.nfl?.ok ? 'ok' : 'bad'}`}>
+                  🏈 ESPN {status.nfl?.ok ? 'CONNECTED' : 'UNREACHABLE'} · {status.nfl?.latencyMs ?? '—'}ms
+                </span>
+              </div>
+              {status.mlb.error && <div style={{ color: 'var(--lose)', marginTop: 10, fontSize: 13 }}>MLB: {status.mlb.error}</div>}
+              {status.nfl?.error && <div style={{ color: 'var(--lose)', marginTop: 10, fontSize: 13 }}>ESPN: {status.nfl.error}</div>}
 
               <div className="setting-row" style={{ marginTop: 14 }}>
                 <div>
@@ -110,8 +158,8 @@ export function SettingsScreen({
               </div>
 
               {status.polling.games.map((g) => (
-                <div key={g.gamePk} style={{ fontSize: 12, color: 'var(--muted)', paddingTop: 8 }}>
-                  Game {g.gamePk} · {g.status ?? 'unknown'} · every {Math.round(g.intervalMs / 1000)}s
+                <div key={g.gameKey ?? g.gamePk} style={{ fontSize: 12, color: 'var(--muted)', paddingTop: 8 }}>
+                  {(g.sport ?? 'mlb').toUpperCase()} game {g.gamePk} · {g.status ?? 'unknown'} · every {Math.round(g.intervalMs / 1000)}s
                   {g.lastError ? <span style={{ color: 'var(--lose)' }}> · {g.lastError}</span> : ''}
                 </div>
               ))}
@@ -139,7 +187,7 @@ export function SettingsScreen({
           <div className="setting-row">
             <div>
               <div className="lbl">Scheduled game interval</div>
-              <div className="desc">How often a game that hasn’t started is checked for first pitch.</div>
+              <div className="desc">How often a game that hasn’t started is checked for first pitch or kickoff.</div>
             </div>
             <select
               className="input" style={{ width: 130 }}
@@ -181,8 +229,8 @@ export function SettingsScreen({
             <div>
               <div className="lbl">Demo mode</div>
               <div className="desc">
-                Adds a simulated game and roster to player search so the whole flow
-                works with no live baseball. Real bets keep tracking real games.
+                Adds a simulated baseball game and roster to player search so the whole flow
+                works with no live games. Real bets keep tracking real games.
               </div>
             </div>
             <button
@@ -201,15 +249,22 @@ export function SettingsScreen({
           the Underdog column. Edit any value and open bets re-score on the next poll.
         </p>
 
+        <div className="toggles">
+          <div className="seg small" aria-label="Scoring sport">
+            <button className={scoringSport === 'mlb' ? 'on' : ''} aria-pressed={scoringSport === 'mlb'} onClick={() => setScoringSport('mlb')}>⚾ MLB</button>
+            <button className={scoringSport === 'nfl' ? 'on' : ''} aria-pressed={scoringSport === 'nfl'} onClick={() => setScoringSport('nfl')}>🏈 NFL</button>
+          </div>
+        </div>
+
         <div className="scoring-tabs">
-          {Object.entries(scoring).map(([key, f]) => (
+          {Object.entries(tabs).map(([key, f]) => (
             <button key={key} className={key === activeFormat ? 'on' : ''} onClick={() => setActiveFormat(key)}>
               {f.label}
             </button>
           ))}
         </div>
 
-        {format && (
+        {scoringSport === 'mlb' && format && (
           <>
             <div style={{ color: 'var(--muted)', fontSize: 11, fontWeight: 800, letterSpacing: '0.13em', margin: '4px 0 10px' }}>
               BATTING
@@ -236,14 +291,28 @@ export function SettingsScreen({
                 </div>
               ))}
             </div>
-
-            <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-              <button className="btn primary" onClick={saveScoring} disabled={saving}>
-                {saving ? 'SAVING…' : 'SAVE SCORING'}
-              </button>
-              <button className="btn ghost" onClick={reset}>RESET TO DEFAULTS</button>
-            </div>
           </>
+        )}
+
+        {scoringSport === 'nfl' && nflFormat && (
+          <div className="scoring-grid">
+            {Object.entries(nflFormat).filter(([stat]) => stat !== 'label').map(([stat, value]) => (
+              <div className="field" key={stat}>
+                <label>{NFL_STAT_LABELS[stat] ?? statLabel(stat)}</label>
+                <input className="input" type="number" step="0.01" value={Number(value)}
+                  onChange={(e) => editNflValue(stat, e.target.value)} />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {((scoringSport === 'mlb' && format) || (scoringSport === 'nfl' && nflFormat)) && (
+          <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+            <button className="btn primary" onClick={saveScoring} disabled={saving}>
+              {saving ? 'SAVING…' : 'SAVE SCORING'}
+            </button>
+            <button className="btn ghost" onClick={reset}>RESET TO DEFAULTS</button>
+          </div>
         )}
       </div>
     </div>

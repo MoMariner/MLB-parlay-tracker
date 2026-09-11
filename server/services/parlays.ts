@@ -48,12 +48,28 @@ export function rollUp(
  * A number that jumps without a reason is just noise; naming the leg that
  * moved is what makes the sparkline worth looking at.
  */
+type ExplainLeg = {
+  id: string;
+  betType: string;
+  currentValue: number;
+  status: string;
+  teamId: number | null;
+  player: { fullName: string } | null;
+  game: { homeTeamId: number; homeAbbrev: string; awayAbbrev: string };
+};
+
+/** "Soto", or for a game line the team it's on ("LAR"), or "Total". */
+function legName(b: ExplainLeg): string {
+  if (b.player) return b.player.fullName.split(' ').slice(-1)[0];
+  if (b.teamId == null) return 'Total';
+  return b.teamId === b.game.homeTeamId ? b.game.homeAbbrev : b.game.awayAbbrev;
+}
+
 function explainMove(
-  bets: { id: string; betType: string; currentValue: number; status: string; player: { fullName: string } }[],
+  bets: ExplainLeg[],
   previous: Record<string, number>,
   direction: 'up' | 'down' | 'flat',
 ): string {
-  const surnameOf = (full: string) => full.split(' ').slice(-1)[0];
   const moved: string[] = [];
 
   for (const b of bets) {
@@ -61,16 +77,18 @@ function explainMove(
     if (before === undefined) continue;
     const delta = b.currentValue - before;
     if (delta === 0) continue;
-    const label = PROP_BY_KEY[b.betType]?.label ?? b.betType;
+    const def = PROP_BY_KEY[b.betType];
+    // A side's value is its margin; a total's value is points.
+    const label = def?.scope === 'game' ? (def.sides === 'team' ? 'margin' : 'pts') : def?.label ?? b.betType;
     const sign = delta > 0 ? '+' : '';
-    moved.push(`${surnameOf(b.player.fullName)} ${sign}${Math.round(delta * 10) / 10} ${label}`);
+    moved.push(`${legName(b)} ${sign}${Math.round(delta * 10) / 10} ${label}`);
   }
 
   const justSettled = bets.filter(
     (b) => ['WON', 'LOST'].includes(b.status) && previous[b.id] !== undefined,
   );
-  const hits = justSettled.filter((b) => b.status === 'WON').map((b) => surnameOf(b.player.fullName));
-  const misses = justSettled.filter((b) => b.status === 'LOST').map((b) => surnameOf(b.player.fullName));
+  const hits = justSettled.filter((b) => b.status === 'WON').map(legName);
+  const misses = justSettled.filter((b) => b.status === 'LOST').map(legName);
 
   if (misses.length > 0 && direction === 'down') return `${misses.join(', ')} missed`;
   if (moved.length > 0) return moved.slice(0, 2).join(' · ');
@@ -87,7 +105,7 @@ function explainMove(
 export async function refreshParlay(parlayId: string) {
   const parlay = await prisma.parlay.findUnique({
     where: { id: parlayId },
-    include: { bets: { include: { player: true } } },
+    include: { bets: { include: { player: true, game: true } } },
   });
   if (!parlay) return null;
 

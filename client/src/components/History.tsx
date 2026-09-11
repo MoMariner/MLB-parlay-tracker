@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import type { Parlay, PropDef } from '../lib/types';
-import { money, num, profitFor } from '../lib/format';
+import { money, num, slipProfit } from '../lib/format';
+import { describeLeg } from '../lib/nfl';
+import { BetText } from './BetText';
 
-/** Settled slips, newest first. */
+/** Settled slips, newest first, across sports. */
 export function History({ props }: { props: Map<string, PropDef> }) {
   const [parlays, setParlays] = useState<Parlay[]>([]);
   const [loading, setLoading] = useState(true);
@@ -24,12 +26,17 @@ export function History({ props }: { props: Map<string, PropDef> }) {
 
   const won = parlays.filter((p) => p.status === 'WON');
   const lost = parlays.filter((p) => p.status === 'LOST');
-  const net = parlays.reduce((sum, p) => {
-    if (p.stake == null || p.odds == null) return sum;
-    if (p.status === 'WON') return sum + profitFor(p.stake, p.odds);
-    if (p.status === 'LOST') return sum - p.stake;
-    return sum;
-  }, 0);
+
+  /**
+   * Profit or loss on a settled slip. An entered payout counts, not just
+   * American odds -- most slips here carry a book's quoted payout instead.
+   */
+  const pl = (p: Parlay): number | null => {
+    if (p.status === 'LOST') return p.stake != null ? -p.stake : null;
+    if (p.status === 'WON') return slipProfit(p.stake, p.odds, p.payout);
+    return p.stake != null ? 0 : null;
+  };
+  const net = parlays.reduce((sum, p) => sum + (pl(p) ?? 0), 0);
   const decided = won.length + lost.length;
 
   return (
@@ -51,52 +58,62 @@ export function History({ props }: { props: Map<string, PropDef> }) {
       </div>
 
       <div className="parlay-list">
-        {parlays.map((p) => (
-          <div className={`parlay ${p.status.toLowerCase()}`} key={p.id}>
-            <header className="parlay-head">
-              <div className="parlay-id">
-                <div className="parlay-name">{p.name || (p.bets.length === 1 ? 'Single' : `${p.bets.length}-Leg Parlay`)}</div>
-                <div className="parlay-meta">
-                  <span className={`chip ${p.status}`}>{p.status}</span>
-                  {p.source !== 'manual' && <span className="chip src">{p.source.toUpperCase()}</span>}
-                  <span className="legs-count">
-                    {new Date(p.settledAt ?? p.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                  </span>
+        {parlays.map((p) => {
+          const result = pl(p);
+          return (
+            <div className={`parlay ${p.status.toLowerCase()}`} key={p.id}>
+              <header className="parlay-head">
+                <div className="parlay-id">
+                  <div className="parlay-name">{p.name || (p.bets.length === 1 ? 'Single' : `${p.bets.length}-Leg Parlay`)}</div>
+                  <div className="parlay-meta">
+                    <span className={`chip ${p.status}`}>{p.status}</span>
+                    {p.source !== 'manual' && <span className="chip src">{p.source.toUpperCase()}</span>}
+                    <span className="legs-count">
+                      {new Date(p.settledAt ?? p.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                    </span>
+                  </div>
                 </div>
+                {p.stake != null && (
+                  <div className="parlay-money" style={{ marginLeft: 'auto' }}>
+                    <div><span className="k">STAKE</span><span className="v">{money(p.stake)}</span></div>
+                    {result != null && (
+                      <div>
+                        <span className="k">P/L</span>
+                        <span className="v" style={{ color: result >= 0 ? 'var(--win)' : 'var(--lose)' }}>
+                          {result >= 0 ? '+' : '−'}{money(Math.abs(result))}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </header>
+              <div className="legs">
+                {p.bets.map((b) => {
+                  const prop = props.get(b.betType);
+                  const t = describeLeg(prop, b, b.game);
+                  const who = b.player?.fullName ?? `${b.game.awayAbbrev} @ ${b.game.homeAbbrev}`;
+                  const finished = prop?.sides === 'team'
+                    ? `margin ${b.currentValue > 0 ? '+' : ''}${num(b.currentValue)}`
+                    : `finished ${num(b.currentValue)}`;
+                  return (
+                    <div className={`hist-leg ${b.status.toLowerCase()}`} key={b.id}>
+                      <div className="hl-who">{b.sport === 'nfl' ? '🏈' : '⚾'} {who}</div>
+                      <div className="hl-bet">
+                        <BetText text={t} />
+                        <span className="hl-final">{finished}</span>
+                      </div>
+                      <div className="hl-res">
+                        <span className={`leg-result ${b.status}`}>
+                          {b.status === 'WON' ? 'HIT' : b.status === 'LOST' ? 'MISS' : b.status}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              {p.stake != null && p.odds != null && (
-                <div className="parlay-money" style={{ marginLeft: 'auto' }}>
-                  <div><span className="k">STAKE</span><span className="v">{money(p.stake)}</span></div>
-                  <div>
-                    <span className="k">P/L</span>
-                    <span className="v" style={{ color: p.status === 'WON' ? 'var(--win)' : 'var(--lose)' }}>
-                      {p.status === 'WON' ? `+${money(profitFor(p.stake, p.odds))}` : `−${money(p.stake)}`}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </header>
-            <div className="legs">
-              {p.bets.map((b) => (
-                <div className={`leg ${b.status.toLowerCase()}`} key={b.id} style={{ gridTemplateColumns: '1.2fr 1.6fr 80px' }}>
-                  <div className="leg-who"><div className="leg-name">{b.player.fullName}</div></div>
-                  <div className="leg-bet">
-                    <span className={b.direction === 'OVER' ? 'over' : 'under'}>
-                      {b.direction === 'OVER' ? 'Over' : 'Under'}
-                    </span>{' '}
-                    <b>{num(b.line)}</b> {props.get(b.betType)?.label ?? b.betType}
-                    <span style={{ color: 'var(--muted)', marginLeft: 10 }}>finished {num(b.currentValue)}</span>
-                  </div>
-                  <div className="leg-pct">
-                    <span className={`leg-result ${b.status}`}>
-                      {b.status === 'WON' ? 'HIT' : b.status === 'LOST' ? 'MISS' : b.status}
-                    </span>
-                  </div>
-                </div>
-              ))}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

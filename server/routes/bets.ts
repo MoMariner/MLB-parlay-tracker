@@ -1,22 +1,23 @@
-/** Bet CRUD (spec §10, §11, §12, §22) + the prop catalog. */
+/** Bet CRUD + the prop catalog. Player and Game rows are shared across bets. */
 
 import { Router } from 'express';
 import { prisma } from '../db.js';
-import { getPlayer, getSchedule, getGameFeed } from '../services/mlbApi.js';
-import { extractGameSnapshot } from '../services/statExtractor.js';
+import { getPlayer } from '../services/mlbApi.js';
+import { nflGetPlayer } from '../nfl/espnApi.js';
 import { pollGame, syncPollers } from '../services/gamePollingManager.js';
-import { PROPS, PROP_BY_KEY, BET_SOURCES } from '../../shared/props.js';
-import { buildDemoFeed, isDemoGame, DEMO_PLAYERS, DEMO_PITCHER, DEMO_TEAM_HOME } from '../services/demoMode.js';
+import { ALL_PROPS, PROP_BY_KEY, BET_SOURCES, type Sport } from '../../shared/props.js';
+import { buildDemoFeed, DEMO_PLAYERS, DEMO_PITCHER, DEMO_TEAM_HOME } from '../services/demoMode.js';
+import { adapterFor, gameKey, playerKey } from '../sports/index.js';
 
 export const betsRouter = Router();
 
 const OPEN = ['PENDING', 'LIVE'];
 const SETTLED = ['WON', 'LOST', 'PUSH', 'VOID'];
-const VALID_SOURCES = new Set(BET_SOURCES.map((s) => s.key));
+const VALID_SOURCES = new Set<string>(BET_SOURCES.map((s) => s.key));
 
-/** Catalog for the bet-type picker. */
+/** Catalog for the bet-type picker, every sport. */
 betsRouter.get('/props', (_req, res) => {
-  res.json({ props: PROPS, sources: BET_SOURCES });
+  res.json({ props: ALL_PROPS, sources: BET_SOURCES });
 });
 
 betsRouter.get('/', async (req, res) => {
@@ -35,56 +36,69 @@ betsRouter.get('/', async (req, res) => {
 });
 
 /**
- * Ensure Player and Game rows exist for a new bet. Shared across bets, so a
- * second prop on the same player/game reuses them rather than duplicating.
+ * Ensure a Player row exists. Shared across bets, so a second prop on the
+ * same player reuses it rather than duplicating.
  */
-async function upsertPlayer(playerId: number) {
-  if (isDemoGame(playerId) || playerId < 0) {
-    const demo = [...DEMO_PLAYERS.map((p) => ({ ...p, type: p.type })), { ...DEMO_PITCHER, slot: 0 }]
-      .find((p) => p.id === playerId);
+export async function upsertPlayer(sport: Sport, playerId: number) {
+  const key = playerKey(sport, playerId);
+  let data: {
+    fullName: string; teamId: number | null; teamName: string | null;
+    teamAbbrev: string | null; position: string | null; positionType: string | null;
+  };
+
+  if (sport === 'nfl') {
+    const p = await nflGetPlayer(playerId);
+    if (!p) throw new Error(`Player ${playerId} not found in NFL data`);
+    data = {
+      fullName: p.fullName, teamId: p.teamId, teamName: p.teamName,
+      teamAbbrev: p.teamAbbrev, position: p.position, positionType: p.positionType,
+    };
+  } else if (playerId < 0) {
+    const demo = [...DEMO_PLAYERS, { ...DEMO_PITCHER, slot: 0 }].find((p) => p.id === playerId);
     if (!demo) throw new Error('Unknown demo player');
-    const data = {
+    data = {
       fullName: demo.fullName, teamId: DEMO_TEAM_HOME.id, teamName: DEMO_TEAM_HOME.name,
       teamAbbrev: DEMO_TEAM_HOME.abbreviation, position: demo.position, positionType: demo.type,
     };
-    return prisma.player.upsert({ where: { id: playerId }, create: { id: playerId, ...data }, update: data });
+  } else {
+    const p = await getPlayer(playerId);
+    if (!p) throw new Error(`Player ${playerId} not found in MLB data`);
+    data = {
+      fullName: p.fullName, teamId: p.teamId, teamName: p.teamName,
+      teamAbbrev: p.teamAbbrev, position: p.position, positionType: p.positionType,
+    };
   }
 
-  const p = await getPlayer(playerId);
-  if (!p) throw new Error(`Player ${playerId} not found in MLB data`);
-  const data = {
-    fullName: p.fullName, teamId: p.teamId, teamName: p.teamName,
-    teamAbbrev: p.teamAbbrev, position: p.position, positionType: p.positionType,
-  };
-  return prisma.player.upsert({ where: { id: playerId }, create: { id: playerId, ...data }, update: data });
+  return prisma.player.upsert({
+    where: { key },
+    create: { key, sport, id: playerId, ...data },
+    update: data,
+  });
 }
 
-async function upsertGame(gamePk: number) {
-  const feed = isDemoGame(gamePk) ? buildDemoFeed() : await getGameFeed(gamePk);
-  const s = extractGameSnapshot(feed);
-  const data = {
-    gameDate: s.gameDate ? new Date(s.gameDate) : new Date(),
-    officialDate: (s.gameDate || new Date().toISOString()).slice(0, 10),
-    status: s.status, detailedState: s.detailedState,
-    homeTeamId: s.homeTeamId, homeName: s.homeName, homeAbbrev: s.homeAbbrev,
-    awayTeamId: s.awayTeamId, awayName: s.awayName, awayAbbrev: s.awayAbbrev,
-    homeScore: s.homeScore, awayScore: s.awayScore,
-    inning: s.inning, inningState: s.inningState, outs: s.outs,
-    balls: s.balls, strikes: s.strikes,
-    onFirst: s.onFirst, onSecond: s.onSecond, onThird: s.onThird,
-    currentPitcherId: s.currentPitcherId, currentPitcherName: s.currentPitcherName,
-  };
-  const game = await prisma.game.upsert({ where: { gamePk }, create: { gamePk, ...data }, update: data });
-  return { game, snapshot: s };
+/** Ensure a Game row exists and is current; returns it with the live snapshot. */
+export async function upsertGame(sport: Sport, gamePk: number) {
+  const adapter = adapterFor(sport);
+  // Reading the demo game must not advance its simulated clock.
+  const feed = sport === 'mlb' && gamePk < 0 ? buildDemoFeed() : await adapter.fetchFeed(gamePk);
+  const snapshot = adapter.snapshot(feed);
+  const data = adapter.gameRow(snapshot);
+  const key = gameKey(sport, gamePk);
+  const game = await prisma.game.upsert({
+    where: { key },
+    create: { key, sport, gamePk, ...(data as any) },
+    update: data,
+  });
+  return { game, snapshot };
 }
 
+/** Single MLB bet (the slip endpoint in routes/parlays.ts is the main path). */
 betsRouter.post('/', async (req, res) => {
   const {
     playerId, gamePk, betType, direction, line,
     source = 'manual', odds = null, stake = null, allowFinal = false,
   } = req.body ?? {};
 
-  // ---- validation (spec §8: the line must be a real number) ----
   const pid = Number(playerId);
   const pk = Number(gamePk);
   const lineNum = Number(line);
@@ -109,44 +123,33 @@ betsRouter.post('/', async (req, res) => {
   }
 
   try {
-    const { game, snapshot } = await upsertGame(pk);
-
-    // Spec §3 -- a finished game can't quietly become a new live bet.
+    const { game, snapshot } = await upsertGame('mlb', pk);
     if (snapshot.status === 'Final' && !allowFinal) {
       return res.status(409).json({
         error: 'That game is already final. Re-submit with allowFinal to log it anyway.',
         code: 'GAME_FINAL',
       });
     }
-
-    await upsertPlayer(pid);
+    const player = await upsertPlayer('mlb', pid);
 
     const bet = await prisma.bet.create({
       data: {
+        sport: 'mlb',
+        playerKey: player.key,
         playerId: pid,
+        gameKey: game.key,
         gamePk: pk,
-        teamId: game.homeTeamId, // corrected below once the feed places the player
+        teamId: player.teamId ?? game.homeTeamId,
         betType, source, direction, line: lineNum,
         odds: oddsNum, stake: stakeNum,
         status: snapshot.status === 'Preview' ? 'PENDING' : 'LIVE',
       },
-      include: { player: true, game: true },
     });
 
-    // Fix teamId from the player record when MLB knows their club.
-    if (bet.player.teamId && bet.player.teamId !== bet.teamId) {
-      await prisma.bet.update({ where: { id: bet.id }, data: { teamId: bet.player.teamId } });
-    }
-
-    // Evaluate immediately so the card shows real numbers, then make sure the
-    // shared poller for this game is running.
-    await pollGame(pk);
+    await pollGame(game.key);
     await syncPollers();
 
-    const fresh = await prisma.bet.findUnique({
-      where: { id: bet.id },
-      include: { player: true, game: true },
-    });
+    const fresh = await prisma.bet.findUnique({ where: { id: bet.id }, include: { player: true, game: true } });
     res.status(201).json({ bet: fresh });
   } catch (err) {
     res.status(502).json({ error: (err as Error).message });
@@ -159,7 +162,7 @@ betsRouter.patch('/:id', async (req, res) => {
 
   if (line !== undefined) {
     const n = Number(line);
-    if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: 'Line must be a valid number' });
+    if (!Number.isFinite(n)) return res.status(400).json({ error: 'Line must be a valid number' });
     data.line = n;
   }
   if (odds !== undefined) data.odds = odds === null || odds === '' ? null : Number(odds);
@@ -175,7 +178,7 @@ betsRouter.patch('/:id', async (req, res) => {
       where: { id: req.params.id }, data, include: { player: true, game: true },
     });
     if (data.line !== undefined || data.status !== undefined) {
-      await pollGame(bet.gamePk).catch(() => {});
+      await pollGame(bet.gameKey).catch(() => {});
       await syncPollers();
     }
     res.json({ bet });
@@ -188,10 +191,8 @@ betsRouter.delete('/:id', async (req, res) => {
   try {
     const bet = await prisma.bet.delete({ where: { id: req.params.id } });
     await syncPollers();
-    res.json({ ok: true, gamePk: bet.gamePk });
+    res.json({ ok: true, gameKey: bet.gameKey });
   } catch {
     res.status(404).json({ error: 'Bet not found' });
   }
 });
-
-export { upsertGame, upsertPlayer };

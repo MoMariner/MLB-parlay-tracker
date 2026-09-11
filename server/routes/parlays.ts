@@ -1,15 +1,16 @@
-/** Slip CRUD. A straight single bet is just a one-leg slip. */
+/** Slip CRUD. A straight single bet is just a one-leg slip; slips may mix sports. */
 
 import { Router } from 'express';
 import { prisma } from '../db.js';
-import { PROP_BY_KEY, BET_SOURCES } from '../../shared/props.js';
+import { PROP_BY_KEY, BET_SOURCES, sportOf, type Sport } from '../../shared/props.js';
 import { pollGame, syncPollers } from '../services/gamePollingManager.js';
 import { listParlays, refreshParlay } from '../services/parlays.js';
 import { upsertGame, upsertPlayer } from './bets.js';
+import { isSport } from '../sports/index.js';
 
 export const parlaysRouter = Router();
 
-const VALID_SOURCES = new Set(BET_SOURCES.map((s) => s.key));
+const VALID_SOURCES = new Set<string>(BET_SOURCES.map((s) => s.key));
 
 parlaysRouter.get('/', async (req, res) => {
   const scope = String(req.query.scope ?? 'open') as 'open' | 'settled' | 'all';
@@ -18,13 +19,28 @@ parlaysRouter.get('/', async (req, res) => {
 
 /** Validate one leg before anything is written. */
 function validateLeg(leg: any): string | null {
-  if (!Number.isFinite(Number(leg?.playerId))) return 'Each leg needs a player';
+  const sport: Sport = leg?.sport ?? 'mlb';
+  if (!isSport(sport)) return `Unknown sport: ${leg?.sport}`;
+  const def = PROP_BY_KEY[leg?.betType];
+  if (!def) return `Unknown bet type: ${leg?.betType}`;
+  if (sportOf(def) !== sport) return `${def.label} isn't a ${sport.toUpperCase()} bet`;
   if (!Number.isFinite(Number(leg?.gamePk))) return 'Each leg needs a game';
-  if (!PROP_BY_KEY[leg?.betType]) return `Unknown bet type: ${leg?.betType}`;
-  if (leg?.direction !== 'OVER' && leg?.direction !== 'UNDER') return 'Direction must be OVER or UNDER';
-  const line = Number(leg?.line);
+
+  const line = Number(leg?.line ?? 0);
   if (!Number.isFinite(line)) return 'Line must be a valid number';
-  if (line < 0) return 'Line cannot be negative';
+
+  // Number(null) is 0, which is finite -- so check for a missing id explicitly.
+  const missing = (v: unknown) => v == null || v === '' || !Number.isFinite(Number(v));
+  if (def.scope !== 'game' && missing(leg?.playerId)) return 'Each player prop needs a player';
+  if ((def.sides === 'team' || def.sides === 'teamOverUnder') && missing(leg?.teamId)) {
+    return `${def.label} needs a team`;
+  }
+  if (def.sides === 'team') {
+    if (leg?.direction !== 'TEAM') return 'Spread and moneyline legs pick a team';
+  } else {
+    if (leg?.direction !== 'OVER' && leg?.direction !== 'UNDER') return 'Direction must be OVER or UNDER';
+    if (line < 0) return 'Line cannot be negative';
+  }
   return null;
 }
 
@@ -59,17 +75,22 @@ parlaysRouter.post('/', async (req, res) => {
     // slip before any of it is written.
     const resolved = [];
     for (const leg of legs) {
+      const sport: Sport = leg.sport ?? 'mlb';
+      const def = PROP_BY_KEY[leg.betType]!;
       const pk = Number(leg.gamePk);
-      const pid = Number(leg.playerId);
-      const { game, snapshot } = await upsertGame(pk);
+      const { game, snapshot } = await upsertGame(sport, pk);
       if (snapshot.status === 'Final' && !allowFinal) {
         return res.status(409).json({
           error: `${game.awayAbbrev} @ ${game.homeAbbrev} is already final.`,
           code: 'GAME_FINAL',
         });
       }
-      const player = await upsertPlayer(pid);
-      resolved.push({ leg, game, snapshot, player, pk, pid });
+      const teamId = leg.teamId != null ? Number(leg.teamId) : null;
+      if (teamId != null && teamId !== game.homeTeamId && teamId !== game.awayTeamId) {
+        return res.status(400).json({ error: `That team isn't playing in ${game.awayAbbrev} @ ${game.homeAbbrev}` });
+      }
+      const player = def.scope === 'game' ? null : await upsertPlayer(sport, Number(leg.playerId));
+      resolved.push({ leg, def, sport, game, snapshot, player, pk, teamId });
     }
 
     const parlay = await prisma.parlay.create({
@@ -80,24 +101,26 @@ parlaysRouter.post('/', async (req, res) => {
         stake: stakeNum,
         payout: payoutNum,
         bets: {
-          create: resolved.map(({ leg, player, snapshot, pk, pid }) => ({
-            playerId: pid,
+          create: resolved.map(({ leg, def, sport, game, snapshot, player, pk, teamId }) => ({
+            sport,
+            playerKey: player?.key ?? null,
+            playerId: player ? Number(leg.playerId) : null,
+            gameKey: game.key,
             gamePk: pk,
-            teamId: player.teamId ?? 0,
+            teamId: def.scope === 'game' ? teamId : (player?.teamId ?? null),
             betType: leg.betType,
             source,
             direction: leg.direction,
-            line: Number(leg.line),
+            line: def.key === 'NFL_MONEYLINE' ? 0 : Number(leg.line ?? 0),
             status: snapshot.status === 'Preview' ? 'PENDING' : 'LIVE',
           })),
         },
       },
-      include: { bets: true },
     });
 
-    // Evaluate each distinct game once so the card shows real numbers now.
-    for (const gamePk of [...new Set(resolved.map((r) => r.pk))]) {
-      await pollGame(gamePk).catch(() => {});
+    // Grade each distinct game once so the card shows real numbers now.
+    for (const key of [...new Set(resolved.map((r) => r.game.key))]) {
+      await pollGame(key).catch(() => {});
     }
     await syncPollers();
 

@@ -87,10 +87,12 @@ export function App() {
     const onParlays = (updated: Parlay[]) => setParlays((prev) => mergeParlays(prev, updated));
 
     // Score/inning changes touch every leg in that game even when no stat moved.
-    const onGame = ({ gamePk, snapshot }: { gamePk: number; snapshot: Parlay['bets'][number]['game'] }) => {
+    // Matched on the sport-prefixed key: an MLB gamePk and an ESPN event id are
+    // separate number spaces.
+    const onGame = ({ gameKey, snapshot }: { gameKey: string; snapshot: Partial<Parlay['bets'][number]['game']> }) => {
       setParlays((prev) => prev.map((p) => ({
         ...p,
-        bets: p.bets.map((b) => (b.gamePk === gamePk ? { ...b, game: { ...b.game, ...snapshot } } : b)),
+        bets: p.bets.map((b) => (b.gameKey === gameKey ? { ...b, game: { ...b.game, ...snapshot } } : b)),
       })));
     };
 

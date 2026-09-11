@@ -671,10 +671,6 @@ table.hist .res.PUSH { color: var(--muted); }
     grid-template-areas: 'photo who field' 'photo bet field' 'photo prog pct' 'side side side' 'stats stats stats';
     gap: 10px 14px;
   }
-  .leg > .photo, .leg-who, .leg-bet, .leg-progress, .leg-pct,
-  .leg-side, .field-state, .leg-rm, .leg-rm-spacer {
-    grid-row: auto; grid-column: auto;
-  }
   .leg-rm { position: absolute; top: 8px; right: 6px; opacity: 1; }
   .field-state { grid-area: field; align-self: start; }
   .leg > .photo { grid-area: photo; }
@@ -745,15 +741,6 @@ table.hist .res.PUSH { color: var(--muted); }
 .situation .pitching { white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
 
 /* Score, bases and outs together, hard against the right edge. */
-.leg > .photo   { grid-row: 1; grid-column: 1; }
-.leg-who        { grid-row: 1; grid-column: 2; }
-.leg-bet        { grid-row: 1; grid-column: 3; }
-.leg-progress   { grid-row: 1; grid-column: 4; }
-.leg-pct        { grid-row: 1; grid-column: 5; }
-.leg-side       { grid-row: 1; grid-column: 6; }
-.field-state    { grid-row: 1; grid-column: 7; }
-.leg-rm,
-.leg-rm-spacer  { grid-row: 1; grid-column: 8; }
 
 .field-state {
   display: flex; align-items: center; justify-content: flex-end; gap: 14px;
@@ -862,3 +849,159 @@ table.hist .res.PUSH { color: var(--muted); }
   letter-spacing: 0.14em; margin-top: 2px;
 }
 .login-note { color: var(--dim); font-size: 12px; text-align: center; margin: 0; }
+
+
+/* ---------- Leg grid placement ----------
+   Scoped with `.leg >` so other lists that reuse the child class names
+   (History) keep their own grids. The media query comes later at equal
+   specificity, so its named areas win on narrow screens. */
+.leg > .photo,
+.leg > .team-logo    { grid-area: 1 / 1; }
+.leg > .leg-who      { grid-area: 1 / 2; }
+.leg > .leg-bet      { grid-area: 1 / 3; }
+.leg > .leg-progress { grid-area: 1 / 4; }
+.leg > .leg-pct      { grid-area: 1 / 5; }
+.leg > .leg-side     { grid-area: 1 / 6; }
+.leg > .field-state  { grid-area: 1 / 7; }
+.leg > .leg-rm,
+.leg > .leg-rm-spacer { grid-area: 1 / 8; }
+.leg > .leg-stats    { grid-area: 2 / 2 / 3 / 7; }
+
+@media (max-width: 1100px) {
+  .leg > .photo, .leg > .team-logo { grid-area: photo; }
+  .leg > .leg-who      { grid-area: who; }
+  .leg > .leg-bet      { grid-area: bet; }
+  .leg > .leg-progress { grid-area: prog; }
+  .leg > .leg-pct      { grid-area: pct; }
+  .leg > .leg-side     { grid-area: side; }
+  .leg > .field-state  { grid-area: field; }
+  .leg > .leg-stats    { grid-area: stats; }
+  .leg > .leg-rm-spacer { display: none; }
+}
+
+/* ---------- Sport and bet-kind toggles ---------- */
+.toggles { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 18px; }
+.seg {
+  display: inline-flex; gap: 4px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+}
+.seg button {
+  background: transparent; border: none; color: var(--muted);
+  font-weight: 800; font-size: 13px; letter-spacing: 0.08em; padding: 9px 16px; border-radius: 9px;
+}
+.seg button:hover { color: var(--text); }
+.seg button.on { background: var(--accent-dim); color: #fff; box-shadow: inset 0 0 0 1px var(--accent); }
+.seg.small button { font-size: 11px; padding: 7px 12px; }
+
+/* ---------- NFL headshots and team logos ---------- */
+/* ESPN headshots are 350x254 landscape; cover crops only the sides, so the face stays whole. */
+.photo.nfl { object-fit: cover; object-position: 50% 0; }
+.team-logo {
+  display: block; object-fit: contain; padding: 7px;
+  background: var(--panel-2); border-radius: 50%; box-shadow: 0 0 0 1px var(--border);
+}
+.photo.sm.team-logo { width: 52px; height: 52px; }
+
+/* ---------- Game cards (player games and the NFL slate) ---------- */
+.game-card .gc-logo { width: 24px; height: 24px; object-fit: contain; vertical-align: -6px; margin: 0 6px; }
+.game-card .gc-odds {
+  display: flex; gap: 12px; margin-top: 8px;
+  color: var(--accent); font-size: 12px; font-weight: 800;
+}
+
+.team-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 18px; }
+.team-btn {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 16px; border-radius: 12px; background: var(--panel);
+  border: 2px solid var(--border); color: var(--text); font-size: 18px; font-weight: 800;
+}
+.team-btn:hover { border-color: var(--border-bright); }
+.team-btn img { width: 32px; height: 32px; object-fit: contain; }
+.team-btn .ln { color: var(--muted); font-size: 14px; font-weight: 700; }
+.team-btn.on { border-color: var(--accent); background: var(--accent-dim); }
+.team-btn.on .ln { color: #cfe2ff; }
+
+/* ---------- NFL leg rows ---------- */
+.leg-bet .team, .sl-bet .team { color: #8fc8ff; font-weight: 800; }
+.leg.on-field { box-shadow: inset 3px 0 0 var(--win); }
+.leg-badge.live { background: #0f2f20; color: #6ce6a6; border-color: #1c7a4c; }
+.leg-badge.redzone { background: #3a1218; color: #ff8b96; border-color: #7a2530; animation: pulse 1.6s infinite; }
+.leg-badge.waiting, .leg-badge.final { background: var(--panel-2); color: var(--muted); }
+.leg-due.strong { color: var(--text); font-weight: 800; font-size: 12px; }
+
+.situation.nfl { flex-direction: column; align-items: flex-start; gap: 2px; }
+.situation.nfl .dd { color: var(--text); font-weight: 800; font-size: 11px; }
+.situation.nfl .last-play {
+  max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--dim); font-weight: 600; font-size: 10px;
+}
+
+/* ---------- NFL scoreboard block ---------- */
+.field-state.nfl .fs-score span.has-ball::after {
+  content: ''; display: inline-block; width: 9px; height: 6px; margin-left: 6px; vertical-align: 2px;
+  background: #b8733d; border: 1px solid #f0c9a0; border-radius: 50%;
+}
+.fs-field.nfl { gap: 5px; }
+.fs-down { font-size: 11px; font-weight: 800; color: var(--text); white-space: nowrap; letter-spacing: 0.03em; }
+.field-bar {
+  position: relative; display: block; width: 88px; height: 14px; border-radius: 3px; overflow: hidden;
+  background: repeating-linear-gradient(90deg, #1e5a37 0 8.2%, #22643d 8.2% 16.4%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.field-bar .ez { position: absolute; top: 0; bottom: 0; width: 9%; }
+.field-bar .ez.own { left: 0; background: #163f28; }
+.field-bar .ez.goal { right: 0; background: #6b1d28; }
+.field-bar .rz-zone { position: absolute; top: 0; bottom: 0; right: 9%; width: 16.4%; background: rgba(255, 77, 94, 0.18); }
+.field-bar.rz .rz-zone { background: rgba(255, 77, 94, 0.42); }
+.field-bar .ball {
+  position: absolute; top: 50%; width: 11px; height: 7px; transform: translate(-50%, -50%);
+  background: #b8733d; border: 1px solid #f0c9a0; border-radius: 50%; box-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+}
+
+/* ---------- History rows ---------- */
+.hist-leg {
+  display: grid; grid-template-columns: minmax(140px, 1.1fr) minmax(0, 1.8fr) 70px;
+  gap: 16px; align-items: center; padding: 11px 18px; border-top: 1px solid var(--border);
+}
+.hist-leg:first-child { border-top: none; }
+.hist-leg.won { background: rgba(33, 208, 122, 0.05); }
+.hist-leg.lost { background: rgba(255, 77, 94, 0.05); }
+.hl-who { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hl-bet .over { color: var(--win); font-weight: 800; }
+.hl-bet .under { color: var(--lose); font-weight: 800; }
+.hl-bet .team { color: #8fc8ff; font-weight: 800; }
+.hl-final { color: var(--muted); margin-left: 10px; font-size: 13px; }
+.hl-res { text-align: right; }
+
+/* ---------- Phones: bet on top, scoreboard gets its own full-width row ----------
+   At iPhone width the right-hand scoreboard column squeezed names to "Matt…".
+   Stacking it under the progress bar gives every piece the full width. */
+@media (max-width: 640px) {
+  .content { padding: 14px 10px 40px; }
+  .leg {
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    grid-template-areas:
+      'photo who   pct'
+      'photo bet   pct'
+      'prog  prog  prog'
+      'field field field'
+      'side  side  side'
+      'stats stats stats';
+    gap: 8px 12px;
+    padding: 12px 14px;
+  }
+  .leg > .photo, .leg > .team-logo { width: 48px; height: 48px; align-self: start; }
+  .leg-name { white-space: normal; }
+  .leg > .leg-pct { align-self: start; font-size: 22px; }
+  .leg > .field-state {
+    justify-content: space-between; border-left: none;
+    padding: 8px 0 0; border-top: 1px solid var(--border);
+  }
+  /* The top-right corner belongs to the win %, so the remove control moves down. */
+  .leg > .leg-rm { top: auto; bottom: 8px; right: 8px; }
+  .leg-stats { flex-wrap: wrap; row-gap: 4px; }
+  .parlay-head { padding: 12px 14px; }
+  .summary-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .summary-row .box { min-width: 0; padding: 10px 12px; }
+  .summary-row .v { font-size: 20px; }
+}

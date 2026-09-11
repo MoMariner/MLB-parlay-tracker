@@ -10,7 +10,11 @@
  * bet-type picker and the bet card all read from this list.
  */
 
-export type PropCategory = 'batting' | 'pitching';
+export type Sport = 'mlb' | 'nfl';
+
+export type PropCategory =
+  | 'batting' | 'pitching'
+  | 'passing' | 'rushing' | 'receiving' | 'scoring' | 'kicking' | 'defense' | 'fantasy' | 'game';
 
 export interface PropDef {
   key: string;
@@ -24,6 +28,22 @@ export interface PropDef {
   decimal?: boolean;
   /** Longer explanation shown under the prop card. */
   help?: string;
+  /** Defaults to 'mlb'. */
+  sport?: Sport;
+  /** 'player' props track one athlete; 'game' lines track the scoreboard. */
+  scope?: 'player' | 'game';
+  /**
+   * How a side is chosen: over/under a number, a team (spread, moneyline),
+   * or a team AND over/under (team total).
+   */
+  sides?: 'overUnder' | 'team' | 'teamOverUnder';
+  /** Shapes the win-probability model: counts, yardage, longest play, points. */
+  kind?: 'count' | 'yards' | 'long' | 'points';
+  /**
+   * True when the stat can only ever go up, so clearing an OVER is final.
+   * Yardage is NOT monotonic in football -- a run for a loss takes yards away.
+   */
+  monotonic?: boolean;
 }
 
 export const PROPS: PropDef[] = [
@@ -56,13 +76,98 @@ export const PROPS: PropDef[] = [
     help: 'Scored with the configurable engine in Settings' },
 ];
 
+
+/**
+ * NFL catalog. Keys are prefixed so they can never collide with MLB's.
+ * Yardage and fantasy props are non-monotonic: a sack, a loss on a carry or a
+ * lost fumble can pull the number back under the line.
+ */
+export const NFL_PROPS: PropDef[] = [
+  // ---- Passing ----
+  { key: 'NFL_PASS_YARDS',           label: 'Passing Yards',           short: 'PASS YDS',      category: 'passing',   sport: 'nfl', kind: 'yards', monotonic: false, commonLines: [199.5, 224.5, 249.5, 274.5] },
+  { key: 'NFL_PASS_TDS',             label: 'Passing Touchdowns',      short: 'PASS TD',       category: 'passing',   sport: 'nfl', kind: 'count', monotonic: true,  commonLines: [0.5, 1.5, 2.5] },
+  { key: 'NFL_PASS_COMPLETIONS',     label: 'Pass Completions',        short: 'CMP',           category: 'passing',   sport: 'nfl', kind: 'count', monotonic: true,  commonLines: [17.5, 20.5, 23.5] },
+  { key: 'NFL_PASS_ATTEMPTS',        label: 'Pass Attempts',           short: 'ATT',           category: 'passing',   sport: 'nfl', kind: 'count', monotonic: true,  commonLines: [29.5, 33.5, 36.5] },
+  { key: 'NFL_INTERCEPTIONS_THROWN', label: 'Interceptions Thrown',    short: 'INT',           category: 'passing',   sport: 'nfl', kind: 'count', monotonic: true,  commonLines: [0.5, 1.5] },
+  { key: 'NFL_PASS_RUSH_YARDS',      label: 'Passing + Rushing Yards', short: 'PASS+RUSH YDS', category: 'passing',   sport: 'nfl', kind: 'yards', monotonic: false, commonLines: [224.5, 249.5, 274.5] },
+
+  // ---- Rushing ----
+  { key: 'NFL_RUSH_YARDS',     label: 'Rushing Yards',             short: 'RUSH YDS',     category: 'rushing', sport: 'nfl', kind: 'yards', monotonic: false, commonLines: [29.5, 49.5, 69.5, 89.5] },
+  { key: 'NFL_RUSH_ATTEMPTS',  label: 'Rush Attempts',             short: 'CAR',          category: 'rushing', sport: 'nfl', kind: 'count', monotonic: true,  commonLines: [9.5, 14.5, 17.5] },
+  { key: 'NFL_RUSH_TDS',       label: 'Rushing Touchdowns',        short: 'RUSH TD',      category: 'rushing', sport: 'nfl', kind: 'count', monotonic: true,  commonLines: [0.5, 1.5] },
+  { key: 'NFL_LONGEST_RUSH',   label: 'Longest Rush',              short: 'LONG',         category: 'rushing', sport: 'nfl', kind: 'long',  monotonic: true,  commonLines: [9.5, 14.5, 19.5] },
+  { key: 'NFL_RUSH_REC_YARDS', label: 'Rushing + Receiving Yards', short: 'RUSH+REC YDS', category: 'rushing', sport: 'nfl', kind: 'yards', monotonic: false, commonLines: [49.5, 74.5, 99.5] },
+
+  // ---- Receiving ----
+  { key: 'NFL_REC_YARDS',   label: 'Receiving Yards',      short: 'REC YDS', category: 'receiving', sport: 'nfl', kind: 'yards', monotonic: false, commonLines: [39.5, 54.5, 69.5, 84.5] },
+  { key: 'NFL_RECEPTIONS',  label: 'Receptions',           short: 'REC',     category: 'receiving', sport: 'nfl', kind: 'count', monotonic: true,  commonLines: [3.5, 4.5, 5.5, 6.5] },
+  { key: 'NFL_REC_TDS',     label: 'Receiving Touchdowns', short: 'REC TD',  category: 'receiving', sport: 'nfl', kind: 'count', monotonic: true,  commonLines: [0.5, 1.5] },
+  { key: 'NFL_LONGEST_REC', label: 'Longest Reception',    short: 'LONG',    category: 'receiving', sport: 'nfl', kind: 'long',  monotonic: true,  commonLines: [14.5, 19.5, 24.5] },
+
+  // ---- Scoring ----
+  { key: 'NFL_ANYTIME_TD', label: 'Anytime Touchdown', short: 'TD', category: 'scoring', sport: 'nfl', kind: 'count', monotonic: true, commonLines: [0.5, 1.5],
+    help: 'Rushing, receiving or return TD. Passing TDs don\u2019t count.' },
+
+  // ---- Kicking ----
+  { key: 'NFL_FG_MADE',        label: 'Field Goals Made',  short: 'FG',    category: 'kicking', sport: 'nfl', kind: 'count',  monotonic: true, commonLines: [0.5, 1.5, 2.5] },
+  { key: 'NFL_KICKING_POINTS', label: 'Kicking Points',    short: 'K PTS', category: 'kicking', sport: 'nfl', kind: 'points', monotonic: true, commonLines: [5.5, 6.5, 7.5, 8.5] },
+  { key: 'NFL_XP_MADE',        label: 'Extra Points Made', short: 'XP',    category: 'kicking', sport: 'nfl', kind: 'count',  monotonic: true, commonLines: [1.5, 2.5, 3.5] },
+
+  // ---- Defense ----
+  { key: 'NFL_TACKLES',           label: 'Tackles + Assists', short: 'TKL',  category: 'defense', sport: 'nfl', kind: 'count', monotonic: true, commonLines: [3.5, 5.5, 7.5] },
+  { key: 'NFL_SACKS',             label: 'Sacks',             short: 'SACK', category: 'defense', sport: 'nfl', kind: 'count', monotonic: true, decimal: true, commonLines: [0.5] },
+  { key: 'NFL_DEF_INTERCEPTIONS', label: 'Interceptions',     short: 'INT',  category: 'defense', sport: 'nfl', kind: 'count', monotonic: true, commonLines: [0.5] },
+
+  // ---- Fantasy ----
+  { key: 'NFL_FANTASY_POINTS', label: 'Fantasy Points', short: 'FP', category: 'fantasy', sport: 'nfl', kind: 'points', monotonic: false, decimal: true,
+    commonLines: [9.5, 12.5, 15.5, 18.5], help: 'Scored with the configurable engine in Settings' },
+
+  // ---- Game lines (no player) ----
+  { key: 'NFL_GAME_TOTAL', label: 'Total Points', short: 'TOTAL',      category: 'game', sport: 'nfl', scope: 'game', sides: 'overUnder',     kind: 'points', monotonic: true,
+    commonLines: [40.5, 44.5, 48.5], help: 'Both teams combined' },
+  { key: 'NFL_TEAM_TOTAL', label: 'Team Total',   short: 'TEAM TOTAL', category: 'game', sport: 'nfl', scope: 'game', sides: 'teamOverUnder', kind: 'points', monotonic: true,
+    commonLines: [17.5, 20.5, 23.5, 27.5], help: 'One team\u2019s points' },
+  { key: 'NFL_SPREAD',     label: 'Spread',       short: 'SPREAD',     category: 'game', sport: 'nfl', scope: 'game', sides: 'team',          kind: 'points', monotonic: false,
+    commonLines: [-7.5, -3.5, -2.5, 2.5, 3.5, 7.5], help: 'Line is from the picked team\u2019s side, e.g. -3.5' },
+  { key: 'NFL_MONEYLINE',  label: 'Moneyline',    short: 'ML',         category: 'game', sport: 'nfl', scope: 'game', sides: 'team',          kind: 'points', monotonic: false,
+    commonLines: [0], help: 'Pick the winner' },
+];
+
+export const ALL_PROPS: PropDef[] = [...PROPS, ...NFL_PROPS];
+
 export const PROP_BY_KEY: Record<string, PropDef> = Object.fromEntries(
-  PROPS.map((p) => [p.key, p]),
+  ALL_PROPS.map((p) => [p.key, p]),
 );
 
-export function propsFor(category: PropCategory): PropDef[] {
-  return PROPS.filter((p) => p.category === category);
+export function sportOf(p: PropDef | undefined): Sport {
+  return p?.sport ?? 'mlb';
 }
+
+export function propsFor(category: PropCategory, sport: Sport = 'mlb'): PropDef[] {
+  return ALL_PROPS.filter((p) => p.category === category && sportOf(p) === sport);
+}
+
+/**
+ * NFL prop menus by position -- a quarterback sees passing first, a kicker
+ * sees kicking only, and defenders see defensive stats rather than yardage.
+ */
+export function nflCategoriesForPosition(position?: string | null): PropCategory[] {
+  const pos = (position ?? '').toUpperCase();
+  if (pos === 'QB') return ['passing', 'rushing', 'scoring', 'fantasy'];
+  if (pos === 'RB' || pos === 'FB') return ['rushing', 'receiving', 'scoring', 'fantasy'];
+  if (pos === 'WR' || pos === 'TE') return ['receiving', 'rushing', 'scoring', 'fantasy'];
+  if (pos === 'K' || pos === 'PK') return ['kicking'];
+  if (['LB', 'ILB', 'OLB', 'MLB', 'DE', 'DT', 'NT', 'DL', 'EDGE', 'CB', 'S', 'SS', 'FS', 'DB'].includes(pos)) {
+    return ['defense'];
+  }
+  return ['rushing', 'receiving', 'scoring'];
+}
+
+export const CATEGORY_LABELS: Record<PropCategory, string> = {
+  batting: 'Batting Props', pitching: 'Pitching Props',
+  passing: 'Passing', rushing: 'Rushing', receiving: 'Receiving', scoring: 'Scoring',
+  kicking: 'Kicking', defense: 'Defense', fantasy: 'Fantasy', game: 'Game Lines',
+};
 
 /**
  * Where the bet was placed. Purely a label + (for fantasy props) a pointer at
@@ -78,7 +183,7 @@ export const BET_SOURCES = [
 
 export type BetSource = (typeof BET_SOURCES)[number]['key'];
 
-export type Direction = 'OVER' | 'UNDER';
+export type Direction = 'OVER' | 'UNDER' | 'TEAM';
 
 export type BetStatus = 'PENDING' | 'LIVE' | 'WON' | 'LOST' | 'PUSH' | 'VOID';
 

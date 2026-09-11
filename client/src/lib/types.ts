@@ -1,3 +1,10 @@
+export type Sport = 'mlb' | 'nfl';
+
+export type PropCategory =
+  | 'batting' | 'pitching'
+  | 'passing' | 'rushing' | 'receiving' | 'scoring' | 'kicking' | 'defense' | 'fantasy' | 'game';
+
+/** A player as returned by search -- MLB or NFL, same shape. */
 export interface MlbPlayer {
   id: number;
   fullName: string;
@@ -10,6 +17,7 @@ export interface MlbPlayer {
   jerseyNumber: string | null;
 }
 
+/** A game as listed in a picker. Football games also carry logos, clock and market lines. */
 export interface MlbGame {
   gamePk: number;
   gameDate: string;
@@ -26,6 +34,13 @@ export interface MlbGame {
   awayScore: number | null;
   inning: number | null;
   inningState: string | null;
+  homeLogo?: string | null;
+  awayLogo?: string | null;
+  period?: number | null;
+  clock?: string | null;
+  marketTotal?: number | null;
+  marketSpread?: number | null;
+  oddsDetails?: string | null;
 }
 
 export interface BattingStats {
@@ -41,6 +56,7 @@ export interface PitchingStats {
   hitBatsmen: number; battersFaced: number; homeRunsAllowed: number;
 }
 
+/** MLB stat line stored on a leg. */
 export interface StatsSnapshot {
   batting: BattingStats;
   pitching: PitchingStats;
@@ -49,14 +65,76 @@ export interface StatsSnapshot {
   isCurrentPitcher: boolean;
 }
 
+/** NFL stat line stored on a leg, as { nfl: NflLine }. */
+export interface NflLine {
+  found: boolean;
+  teamId: number | null;
+  passing: { completions: number; attempts: number; yards: number; touchdowns: number; interceptions: number; sacks: number };
+  rushing: { attempts: number; yards: number; touchdowns: number; long: number };
+  receiving: { receptions: number; targets: number; yards: number; touchdowns: number; long: number };
+  fumbles: { fumbles: number; lost: number };
+  defense: { tackles: number; solo: number; sacks: number; tfl: number; passesDefended: number; qbHits: number; touchdowns: number; interceptions: number };
+  kicking: { fgMade: number; fgAttempts: number; xpMade: number; xpAttempts: number; points: number; long: number };
+  returns: { kickTouchdowns: number; puntTouchdowns: number };
+}
+
+/** The live game a leg rides on, as stored and pushed by the server. */
+export interface Game {
+  key: string;
+  sport: Sport;
+  gamePk: number;
+  gameDate: string;
+  status: string;
+  detailedState: string | null;
+  homeTeamId: number;
+  homeName: string;
+  homeAbbrev: string;
+  awayTeamId: number;
+  awayName: string;
+  awayAbbrev: string;
+  homeScore: number | null;
+  awayScore: number | null;
+  homeLogo: string | null;
+  awayLogo: string | null;
+  // MLB
+  inning: number | null;
+  inningState: string | null;
+  outs: number | null;
+  balls: number | null;
+  strikes: number | null;
+  onFirst: boolean;
+  onSecond: boolean;
+  onThird: boolean;
+  currentPitcherId: number | null;
+  currentPitcherName: string | null;
+  // NFL
+  period: number | null;
+  clock: string | null;
+  possessionTeamId: number | null;
+  down: number | null;
+  distance: number | null;
+  yardsToEndzone: number | null;
+  downDistanceText: string | null;
+  isRedZone: boolean;
+  lastPlay: string | null;
+  homeLinescores: string | null;
+  awayLinescores: string | null;
+  homeWinProb: number | null;
+  marketTotal: number | null;
+  marketSpread: number | null;
+}
+
 export interface Bet {
   id: string;
-  playerId: number;
+  sport: Sport;
+  playerKey: string | null;
+  playerId: number | null;
+  gameKey: string;
   gamePk: number;
-  teamId: number;
+  teamId: number | null;
   betType: string;
   source: string;
-  direction: 'OVER' | 'UNDER';
+  direction: 'OVER' | 'UNDER' | 'TEAM';
   line: number;
   odds: number | null;
   stake: number | null;
@@ -71,37 +149,38 @@ export interface Bet {
   expectedInningsLeft: number | null;
   workloadNote: string | null;
   shortLeash: boolean;
+  fieldStatus: string | null;
+  paceValue: number | null;
   winProbability: number | null;
   chancesLeft: number | null;
   parlayId: string | null;
   settledAt: string | null;
   createdAt: string;
+  /** Null on game lines (totals, spreads, moneylines). */
   player: {
     id: number; fullName: string; teamId: number | null; teamName: string | null;
     teamAbbrev: string | null; position: string | null; positionType: string | null;
-  };
-  game: {
-    gamePk: number; gameDate: string; status: string; detailedState: string | null;
-    homeTeamId: number; homeName: string; homeAbbrev: string;
-    awayTeamId: number; awayName: string; awayAbbrev: string;
-    homeScore: number | null; awayScore: number | null;
-    inning: number | null; inningState: string | null; outs: number | null;
-    balls: number | null; strikes: number | null;
-    onFirst: boolean; onSecond: boolean; onThird: boolean;
-    currentPitcherId: number | null; currentPitcherName: string | null;
-  };
+  } | null;
+  game: Game;
 }
 
 export interface PropDef {
-  key: string; label: string; short: string;
-  category: 'batting' | 'pitching';
+  key: string;
+  label: string;
+  short: string;
+  category: PropCategory;
   commonLines: number[];
   decimal?: boolean;
   help?: string;
+  sport?: Sport;
+  scope?: 'player' | 'game';
+  sides?: 'overUnder' | 'team' | 'teamOverUnder';
+  kind?: 'count' | 'yards' | 'long' | 'points';
+  monotonic?: boolean;
 }
 
 export interface PropGroup {
-  category: 'batting' | 'pitching';
+  category: PropCategory;
   label: string;
   props: PropDef[];
 }
@@ -119,6 +198,9 @@ export interface ScoringFormat {
   batting: Record<string, number>;
   pitching: Record<string, number>;
 }
+
+/** NFL fantasy formats are flat: a label plus stat -> points. */
+export type NflScoring = { label: string } & Record<string, number | string>;
 
 export interface ParlayPoint {
   id: string;

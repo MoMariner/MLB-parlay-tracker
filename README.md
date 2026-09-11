@@ -16,6 +16,14 @@ npm install && npm run db:push && npm run dev
 - API: http://localhost:4000
 - Both bind `0.0.0.0`, so a TV or phone on the same Wi-Fi can open the LAN URL printed at startup.
 
+**On an iCloud-synced folder (like the Desktop):** `node_modules` is a symlink to
+`node_modules.nosync`, which iCloud never offloads. An offloaded dependency makes
+Node hang on import with no error. After a fresh install, recreate it:
+
+```bash
+mv node_modules node_modules.nosync && ln -s node_modules.nosync node_modules
+```
+
 `npm run verify` runs the settlement and batting-status edge cases.
 `npm run replay <timecode>` replays a real game state through the extractor
 (get timecodes from `/api/v1.1/game/<gamePk>/feed/live/timestamps`).
@@ -88,6 +96,47 @@ and allowing more earned runs than usual shortens the projection to reflect a
 quicker hook. Both are approximations: a long inning moves hitters up, and a real
 hook depends on the bullpen and the score, which the stats API doesn't expose.
 
+## NFL
+
+A slip can mix MLB and NFL legs.
+
+**Player props** — passing yards, TDs, completions, attempts and interceptions;
+rushing yards, attempts, TDs and longest rush; receiving yards, receptions, TDs
+and longest catch; rushing + receiving and passing + rushing yards; anytime TD;
+kicking (field goals, extra points, kicking points); defense (tackles, sacks,
+interceptions); fantasy points. The menu follows the player's position — a
+quarterback sees passing first, a kicker sees kicking only.
+
+**Game lines** — total points, team totals, spreads and moneylines, pre-filled
+from the market line ESPN publishes for the game.
+
+**Data** comes from ESPN's public site API: the scoreboard for the slate, a
+per-game summary for the box score, drives and ESPN's own play-by-play win
+probability. ESPN has no official stats API; these are the endpoints its own apps use.
+
+**Settlement differs from baseball.** Yardage is not monotonic — a sack or a run
+for a loss takes yards away — so a yardage over never settles early; it waits
+for the final whistle. Counting stats (catches, touchdowns) can clear early, and
+every football leg keeps being re-checked until the game ends, because a
+touchdown can be overturned on review.
+
+**Win probability.** Player props model the rest of the game from per-game
+history (last season folded in while the current one is thin), blended with the
+posted line and scaled by the clock. Game lines treat final margin and total as
+roughly normal around the market spread and total — about 13.5 points of spread
+over a full game, shrinking with the square root of the time left. Once a game
+is live, ESPN's win probability anchors moneylines, and spreads are priced
+consistently off it.
+
+**Live situation** — quarter and clock, who has the ball, down and distance, a
+field-position bar with the red zone marked, and whether the player's unit is
+on the field right now.
+
+`npm run nfl-verify` grades real outcomes against a final box score and checks
+the probability maths against hand-computed values.
+`npm run nfl-boxscore -- <eventId>` compares the extractor with ESPN's raw box
+score for any game.
+
 ## How it's wired
 
 ```
@@ -106,6 +155,8 @@ shared/props.ts        the prop catalog
     seasonStats.ts     season rates, shrunk toward league average
     pitcherWorkload.ts last-10-appearance baseline for the hook
     parlays.ts         slip rollup from its legs
+  sports/              one adapter per sport behind a sport-agnostic poller
+  nfl/                 ESPN client, box-score extractor, grading, win probability
 prisma/schema.prisma   Parlay · Player · Game · Bet · Setting
 ```
 

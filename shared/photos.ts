@@ -17,7 +17,12 @@ export type PhotoSize = 'sm' | 'md' | 'lg';
  */
 const SPOT_PX: Record<PhotoSize, number> = { sm: 120, md: 180, lg: 240 };
 
-export function getPlayerPhoto(playerId: number, size: PhotoSize = 'md'): string {
+export function getPlayerPhoto(playerId: number, size: PhotoSize = 'md', sport: 'mlb' | 'nfl' = 'mlb'): string {
+  if (sport === 'nfl') {
+    // ESPN's combiner: 350x254, head centred with a transparent surround, so
+    // a round frame with object-fit: cover trims only the shoulders.
+    return `https://a.espncdn.com/combiner/i?img=/i/headshots/nfl/players/full/${playerId}.png&w=350&h=254`;
+  }
   return `https://midfield.mlbstatic.com/v1/people/${playerId}/spots/${SPOT_PX[size]}`;
 }
 

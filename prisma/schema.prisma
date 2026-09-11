@@ -7,57 +7,92 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/// One record per MLB player referenced by any bet.
-/// Multiple bets on the same player share this row (spec §12).
+/// One record per player referenced by any bet, across sports.
+///
+/// Keyed "<sport>:<league id>" (e.g. "mlb:592450", "nfl:12483"). MLB and ESPN
+/// ids are independent number spaces, so a bare integer key could collide;
+/// the prefix makes that impossible by construction.
 model Player {
-  id           Int      @id // MLB player ID (people.id)
+  key          String   @id
+  sport        String   @default("mlb")
+  /// The league's own id -- MLB people.id, or ESPN athlete id for the NFL.
+  id           Int
   fullName     String
   teamId       Int?
   teamName     String?
   teamAbbrev   String?
-  position     String? // abbreviation, e.g. "RF", "P"
-  positionType String? // "Pitcher" | "Hitter" | "Outfielder" | "Infielder" | "Catcher" | "Two-Way Player"
+  position     String? // abbreviation, e.g. "RF", "P", "QB", "WR"
+  positionType String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   bets Bet[]
+
+  @@unique([sport, id])
 }
 
-/// One record per MLB game referenced by any bet.
-/// The polling manager keys off gamePk so N bets in one game => ONE feed request (spec §27).
+/// One record per game referenced by any bet, across sports.
+/// Keyed "<sport>:<event id>". The poller runs one feed request per game key.
 model Game {
-  gamePk       Int      @id
-  gameDate     DateTime
-  officialDate String
-  status       String // "Preview" | "Live" | "Final"
+  key           String   @id
+  sport         String   @default("mlb")
+  /// MLB gamePk, or ESPN event id for the NFL.
+  gamePk        Int
+  gameDate      DateTime
+  officialDate  String
+  status        String // "Preview" | "Live" | "Final" | "Other"
   detailedState String?
-  homeTeamId   Int
-  homeName     String
-  homeAbbrev   String
-  awayTeamId   Int
-  awayName     String
-  awayAbbrev   String
-  homeScore    Int?
-  awayScore    Int?
-  inning       Int?
-  inningState  String?
-  outs         Int?
-  balls        Int?
-  strikes      Int?
+  homeTeamId    Int
+  homeName      String
+  homeAbbrev    String
+  awayTeamId    Int
+  awayName      String
+  awayAbbrev    String
+  homeScore     Int?
+  awayScore     Int?
+  homeLogo      String?
+  awayLogo      String?
 
-  /// Runners on base, for the diamond on the card.
-  onFirst  Boolean @default(false)
-  onSecond Boolean @default(false)
-  onThird  Boolean @default(false)
-
-  /// Who is on the mound right now.
+  // ---- MLB situation ----
+  inning             Int?
+  inningState        String?
+  outs               Int?
+  balls              Int?
+  strikes            Int?
+  onFirst            Boolean @default(false)
+  onSecond           Boolean @default(false)
+  onThird            Boolean @default(false)
   currentPitcherId   Int?
   currentPitcherName String?
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  // ---- NFL situation ----
+  /// Quarter; 5 and up is overtime.
+  period           Int?
+  clock            String?
+  possessionTeamId Int?
+  down             Int?
+  distance         Int?
+  /// Yards the offense still needs for a touchdown, 0-100.
+  yardsToEndzone   Int?
+  downDistanceText String?
+  isRedZone        Boolean @default(false)
+  lastPlay         String?
+  /// JSON arrays of per-quarter points.
+  homeLinescores   String?
+  awayLinescores   String?
+  /// ESPN's live win probability for the home side, 0..1.
+  homeWinProb      Float?
+  /// Pregame market total and spread (home perspective), the priors for
+  /// game-line win probability.
+  marketTotal      Float?
+  marketSpread     Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   bets Bet[]
+
+  @@unique([sport, gamePk])
 }
 
 /// A bet slip: one or more legs that must ALL hit. A straight single bet is
@@ -104,15 +139,22 @@ model ParlayPoint {
 }
 
 model Bet {
-  id     String @id @default(cuid())
+  id    String @id @default(cuid())
+  sport String @default("mlb")
 
-  playerId Int
-  gamePk   Int
-  teamId   Int
+  /// Null for game-level markets (totals, spreads, moneylines).
+  playerKey String?
+  playerId  Int?
+  gameKey   String
+  gamePk    Int
+  /// The team a player plays for, or the side picked on a spread, moneyline
+  /// or team total. Null for a whole-game total.
+  teamId    Int?
 
-  betType   String // PropKey, e.g. "HITS" | "TOTAL_BASES" | "FANTASY_POINTS" | "PITCHER_STRIKEOUTS"
-  source    String @default("manual") // "manual" | "underdog" | "draftkings" | "fanduel"
-  direction String // "OVER" | "UNDER"
+  betType   String // PropKey, e.g. "HITS" | "NFL_PASS_YARDS" | "NFL_GAME_TOTAL"
+  source    String @default("manual")
+  /// OVER | UNDER, or TEAM for a spread / moneyline pick.
+  direction String
   line      Float
 
   odds  Int?
@@ -130,36 +172,40 @@ model Bet {
   /// Slip this leg belongs to. Every bet gets one, even a straight single.
   parlayId String?
 
-  /// JSON blob of the player's full live stat line at last evaluation, so bet
-  /// cards can render component stats (AB/H/HR/RBI/R) without a refetch.
+  /// JSON blob of the player's live stat line at last evaluation, so cards can
+  /// render component stats without a refetch.
   statsSnapshot String?
-  /// Batting status badge: AT_BAT | ON_DECK | COMING_UP | BATTERS_AWAY | ...
-  battingStatus String?
-  /// Hitters until this player's spot, when battingStatus is BATTERS_AWAY.
-  battersAway   Int?
-  /// Half-inning this hitter is projected to bat in next.
-  expectedInning Int?
-  expectedHalf   String?
-  /// Innings a pitcher is projected to still throw, and the reasoning behind it.
+
+  // ---- MLB display state ----
+  battingStatus       String?
+  battersAway         Int?
+  expectedInning      Int?
+  expectedHalf        String?
   expectedInningsLeft Float?
   workloadNote        String?
   shortLeash          Boolean @default(false)
+
+  // ---- NFL display state ----
+  /// ON_OFFENSE | ON_DEFENSE | RED_ZONE | NOT_IN_BOX_SCORE ...
+  fieldStatus String?
+  /// Where the stat projects to at the current rate, e.g. 312 passing yards.
+  paceValue   Float?
 
   settledAt DateTime?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
-  player Player  @relation(fields: [playerId], references: [id])
-  game   Game    @relation(fields: [gamePk], references: [gamePk])
+  player Player? @relation(fields: [playerKey], references: [key])
+  game   Game    @relation(fields: [gameKey], references: [key])
   parlay Parlay? @relation(fields: [parlayId], references: [id], onDelete: Cascade)
 
-  @@index([gamePk])
+  @@index([gameKey])
   @@index([status])
   @@index([parlayId])
 }
 
-/// Single-row key/value store for app settings (polling interval, fantasy
-/// scoring configs, display prefs). Values are JSON strings.
+/// Key/value store for app settings (polling interval, fantasy scoring
+/// configs, display prefs). Values are JSON strings.
 model Setting {
   key       String   @id
   value     String

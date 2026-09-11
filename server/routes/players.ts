@@ -1,12 +1,17 @@
-/** Player search + selection + their games (spec §1, §2, §3). */
+/** Player search, selection, their games and their prop menu -- any sport. */
 
 import { Router } from 'express';
 import { searchPlayers, getPlayer, getPlayerGames } from '../services/mlbApi.js';
-import { categoriesForPosition, propsFor } from '../../shared/props.js';
+import { nflSearchPlayers, nflGetPlayer, nflGetPlayerGames } from '../nfl/espnApi.js';
+import {
+  categoriesForPosition, nflCategoriesForPosition, propsFor, CATEGORY_LABELS, type Sport,
+} from '../../shared/props.js';
 import { getSettings } from '../services/settings.js';
 import { DEMO_PLAYERS, DEMO_PITCHER, DEMO_TEAM_HOME, DEMO_GAME_PK, buildDemoFeed } from '../services/demoMode.js';
 
 export const playersRouter = Router();
+
+const sportParam = (q: unknown): Sport => (q === 'nfl' ? 'nfl' : 'mlb');
 
 function demoRoster() {
   return [
@@ -26,8 +31,11 @@ function demoRoster() {
 playersRouter.get('/search', async (req, res) => {
   const q = String(req.query.q ?? '').trim();
   if (q.length < 2) return res.json({ players: [] });
+  const sport = sportParam(req.query.sport);
 
   try {
+    if (sport === 'nfl') return res.json({ players: await nflSearchPlayers(q) });
+
     const real = await searchPlayers(q);
     // In demo mode the fake roster is offered alongside real players so the
     // whole flow is exercisable with no live games on the schedule.
@@ -43,13 +51,17 @@ playersRouter.get('/search', async (req, res) => {
 playersRouter.get('/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid player id' });
-
-  if (id < 0) {
-    const p = demoRoster().find((d) => d.id === id);
-    return p ? res.json({ player: p }) : res.status(404).json({ error: 'Demo player not found' });
-  }
+  const sport = sportParam(req.query.sport);
 
   try {
+    if (sport === 'nfl') {
+      const player = await nflGetPlayer(id);
+      return player ? res.json({ player }) : res.status(404).json({ error: 'Player not found' });
+    }
+    if (id < 0) {
+      const p = demoRoster().find((d) => d.id === id);
+      return p ? res.json({ player: p }) : res.status(404).json({ error: 'Demo player not found' });
+    }
     const player = await getPlayer(id);
     if (!player) return res.status(404).json({ error: 'Player not found' });
     res.json({ player });
@@ -58,31 +70,33 @@ playersRouter.get('/:id', async (req, res) => {
   }
 });
 
-/** Spec §3 -- the player's upcoming/live games, chronologically. */
+/** The player's live, recent and upcoming games, chronologically. */
 playersRouter.get('/:id/games', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid player id' });
-
-  if (id < 0) {
-    const feed = buildDemoFeed();
-    const gd = feed.gameData;
-    const ls = feed.liveData.linescore;
-    return res.json({
-      games: [{
-        gamePk: DEMO_GAME_PK,
-        gameDate: gd.datetime.dateTime,
-        officialDate: gd.datetime.dateTime.slice(0, 10),
-        status: gd.status.abstractGameState,
-        detailedState: gd.status.detailedState,
-        homeTeamId: gd.teams.home.id, homeName: gd.teams.home.name, homeAbbrev: gd.teams.home.abbreviation,
-        awayTeamId: gd.teams.away.id, awayName: gd.teams.away.name, awayAbbrev: gd.teams.away.abbreviation,
-        homeScore: ls.teams.home.runs, awayScore: ls.teams.away.runs,
-        inning: ls.currentInning, inningState: ls.inningState,
-      }],
-    });
-  }
+  const sport = sportParam(req.query.sport);
 
   try {
+    if (sport === 'nfl') return res.json({ games: await nflGetPlayerGames(id) });
+
+    if (id < 0) {
+      const feed = buildDemoFeed();
+      const gd = feed.gameData;
+      const ls = feed.liveData.linescore;
+      return res.json({
+        games: [{
+          gamePk: DEMO_GAME_PK,
+          gameDate: gd.datetime.dateTime,
+          officialDate: gd.datetime.dateTime.slice(0, 10),
+          status: gd.status.abstractGameState,
+          detailedState: gd.status.detailedState,
+          homeTeamId: gd.teams.home.id, homeName: gd.teams.home.name, homeAbbrev: gd.teams.home.abbreviation,
+          awayTeamId: gd.teams.away.id, awayName: gd.teams.away.name, awayAbbrev: gd.teams.away.abbreviation,
+          homeScore: ls.teams.home.runs, awayScore: ls.teams.away.runs,
+          inning: ls.currentInning, inningState: ls.inningState,
+        }],
+      });
+    }
     res.json({ games: await getPlayerGames(id) });
   } catch (err) {
     res.status(502).json({ error: (err as Error).message });
@@ -90,18 +104,24 @@ playersRouter.get('/:id/games', async (req, res) => {
 });
 
 /**
- * Spec §13/§14 -- prop menu tailored to the player's position, so a pitcher
- * never sees batting props first and nobody picks "batter or pitcher" by hand.
+ * Prop menu tailored to the player's position, so a pitcher never sees
+ * batting props and a kicker never sees receiving yards.
  */
 playersRouter.get('/:id/props', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid player id' });
+  const sport = sportParam(req.query.sport);
 
   try {
     let position: string | null = null;
     let positionType: string | null = null;
 
-    if (id < 0) {
+    if (sport === 'nfl') {
+      const player = await nflGetPlayer(id);
+      if (!player) return res.status(404).json({ error: 'Player not found' });
+      position = player.position;
+      positionType = player.positionType;
+    } else if (id < 0) {
       const p = demoRoster().find((d) => d.id === id);
       position = p?.position ?? null;
       positionType = p?.positionType ?? null;
@@ -112,15 +132,16 @@ playersRouter.get('/:id/props', async (req, res) => {
       positionType = player.positionType;
     }
 
-    const categories = categoriesForPosition(position, positionType);
+    const categories = sport === 'nfl'
+      ? nflCategoriesForPosition(position)
+      : categoriesForPosition(position, positionType);
+
     res.json({
       position,
       positionType,
-      categories: categories.map((c) => ({
-        category: c,
-        label: c === 'pitching' ? 'Pitching Props' : 'Batting Props',
-        props: propsFor(c),
-      })),
+      categories: categories
+        .map((c) => ({ category: c, label: CATEGORY_LABELS[c], props: propsFor(c, sport) }))
+        .filter((g) => g.props.length > 0),
     });
   } catch (err) {
     res.status(502).json({ error: (err as Error).message });

@@ -1,10 +1,14 @@
 import { useState } from 'react';
-import type { Parlay, PropDef, StatsSnapshot, Bet } from '../lib/types';
+import type { Parlay, PropDef, StatsSnapshot, Bet, NflLine } from '../lib/types';
 import { PlayerPhoto } from './PlayerPhoto';
 import { api } from '../lib/api';
 import { BATTING_STATUS_META, battingStatusLabel, money, num, slipPayout, slipProfit } from '../lib/format';
 import { GameSituation, FieldState } from './GameSituation';
 import { WinSparkline } from './WinSparkline';
+import {
+  describeLeg, fieldStatusMeta, linescoreChips, marginNote, nflChips, paceUnit, signed, teamLogoFor,
+} from '../lib/nfl';
+import { BetText } from './BetText';
 
 /**
  * One slip = one wide horizontal card, every leg a row with its own progress
@@ -187,10 +191,21 @@ function pctTone(status: string, pct: number | null): string {
   return 'longshot';
 }
 
-function LegRow({
-  leg, prop, showRemove, onRemove,
-}: { leg: Bet; prop: PropDef | undefined; showRemove: boolean; onRemove: () => void }) {
-  const snapshot: StatsSnapshot | null = leg.statsSnapshot ? safeParse(leg.statsSnapshot) : null;
+interface LegRowProps {
+  leg: Bet;
+  prop: PropDef | undefined;
+  showRemove: boolean;
+  onRemove: () => void;
+}
+
+/** Hands each leg to the row that knows its sport and shape. */
+function LegRow(p: LegRowProps) {
+  if (p.leg.sport === 'nfl') return p.prop?.scope === 'game' ? <NflGameLegRow {...p} /> : <NflPlayerLegRow {...p} />;
+  return <MlbLegRow {...p} />;
+}
+
+function MlbLegRow({ leg, prop, showRemove, onRemove }: LegRowProps) {
+  const snapshot: StatsSnapshot | null = leg.statsSnapshot ? safeParse<StatsSnapshot>(leg.statsSnapshot) : null;
   const isPitching = prop?.category === 'pitching';
   const isOver = leg.direction === 'OVER';
 
@@ -218,13 +233,13 @@ function LegRow({
 
   return (
     <div className={`leg ${leg.status.toLowerCase()}${onMound ? ' on-mound' : ''}${pulled ? ' pulled' : ''}`}>
-      <PlayerPhoto playerId={leg.playerId} size="sm" alt={leg.player.fullName} />
+      <PlayerPhoto playerId={leg.playerId ?? 0} size="sm" alt={leg.player?.fullName ?? ''} />
 
       <div className="leg-who">
-        <div className="leg-name">{leg.player.fullName}</div>
+        <div className="leg-name">{leg.player?.fullName}</div>
         <div className="leg-team">
-          {leg.player.teamAbbrev ?? ''}
-          {leg.player.position ? ` · ${leg.player.position}` : ''}
+          {leg.player?.teamAbbrev ?? ''}
+          {leg.player?.position ? ` · ${leg.player.position}` : ''}
         </div>
       </div>
 
@@ -301,6 +316,149 @@ function LegRow({
         </div>
       )}
 
+      <RowTail leg={leg} showRemove={showRemove} onRemove={onRemove} />
+    </div>
+  );
+}
+
+/** A football player prop: yardage, catches, touchdowns, tackles... */
+function NflPlayerLegRow({ leg, prop, showRemove, onRemove }: LegRowProps) {
+  const line = safeParse<{ nfl: NflLine }>(leg.statsSnapshot)?.nfl ?? null;
+  const isOver = leg.direction !== 'UNDER';
+  const target = isOver
+    ? (prop?.decimal ? leg.line : Number.isInteger(leg.line) ? leg.line + 1 : Math.ceil(leg.line))
+    : leg.line;
+  const settled = ['WON', 'LOST', 'PUSH', 'VOID'].includes(leg.status);
+  const barTone = leg.status === 'WON' ? 'win' : leg.status === 'LOST' ? 'dead'
+    : !isOver && leg.progress > 0.6 ? 'risk' : '';
+  const g = leg.game;
+  const status = fieldStatusMeta(leg.fieldStatus, prop?.category);
+  const onField = !settled && (status?.tone === 'live' || status?.tone === 'redzone');
+
+  return (
+    <div className={`leg nfl ${leg.status.toLowerCase()}${onField ? ' on-field' : ''}`}>
+      <PlayerPhoto playerId={leg.playerId ?? 0} size="sm" alt={leg.player?.fullName ?? ''} sport="nfl" />
+
+      <div className="leg-who">
+        <div className="leg-name">{leg.player?.fullName}</div>
+        <div className="leg-team">
+          {leg.player?.teamAbbrev ?? ''}
+          {leg.player?.position ? ` · ${leg.player.position}` : ''}
+        </div>
+      </div>
+
+      <div className="leg-bet"><BetText text={describeLeg(prop, leg, g)} /></div>
+
+      <div className="leg-progress">
+        <div className="leg-nums">
+          <b>{num(leg.currentValue)}</b>
+          <span>/ {num(target)}</span>
+        </div>
+        <div className={`bar ${barTone}`}>
+          <i style={{ width: `${Math.round(leg.progress * 100)}%` }} />
+        </div>
+      </div>
+
+      <PctCell leg={leg} />
+
+      <div className="leg-side">
+        {!settled && status && <span className={`leg-badge ${status.tone}`}>{status.icon} {status.label}</span>}
+        {!settled && g.status === 'Live' && leg.paceValue != null && (
+          <span className="leg-due">On pace for {num(leg.paceValue)} {paceUnit(prop)}</span>
+        )}
+        <GameSituation game={g} />
+      </div>
+
+      <FieldState game={g} />
+
+      {line?.found && (
+        <div className="leg-stats">
+          {nflChips(prop, line, leg.player?.position ?? null).map((c) => <S key={c.k} k={c.k} v={c.v} />)}
+        </div>
+      )}
+
+      <RowTail leg={leg} showRemove={showRemove} onRemove={onRemove} />
+    </div>
+  );
+}
+
+/** A football game line: total, team total, spread or moneyline. */
+function NflGameLegRow({ leg, prop, showRemove, onRemove }: LegRowProps) {
+  const g = leg.game;
+  const settled = ['WON', 'LOST', 'PUSH', 'VOID'].includes(leg.status);
+  const side = prop?.sides === 'team';
+  const isOver = leg.direction !== 'UNDER';
+  const target = Number.isInteger(leg.line) ? leg.line + 1 : Math.ceil(leg.line);
+  const logo = teamLogoFor(g, leg.teamId) ?? g.homeLogo;
+  const note = marginNote(prop, leg);
+  const quarters = linescoreChips(g);
+  const barTone = leg.status === 'WON' ? 'win' : leg.status === 'LOST' ? 'dead'
+    : !side && !isOver && leg.progress > 0.6 ? 'risk' : '';
+
+  return (
+    <div className={`leg nfl game-line ${leg.status.toLowerCase()}`}>
+      {logo
+        ? <img className="photo sm team-logo" src={logo} alt="" />
+        : <span className="photo sm team-logo" />}
+
+      <div className="leg-who">
+        <div className="leg-name">{g.awayAbbrev} @ {g.homeAbbrev}</div>
+        <div className="leg-team">{prop?.label ?? leg.betType}</div>
+      </div>
+
+      <div className="leg-bet"><BetText text={describeLeg(prop, leg, g)} /></div>
+
+      <div className="leg-progress">
+        <div className="leg-nums">
+          {side
+            ? <><b>{signed(leg.currentValue)}</b><span>margin</span></>
+            : <><b>{num(leg.currentValue)}</b><span>/ {num(target)} pts</span></>}
+        </div>
+        {/* A side has no distance to a line; its bar is its chance to cover. */}
+        <div className={`bar ${barTone}`}>
+          <i style={{ width: `${Math.round(leg.progress * 100)}%` }} />
+        </div>
+      </div>
+
+      <PctCell leg={leg} />
+
+      <div className="leg-side">
+        {!settled && note && <span className="leg-due strong">{note}</span>}
+        {!settled && !side && g.status === 'Live' && leg.paceValue != null && (
+          <span className="leg-due">On pace for {num(leg.paceValue)} pts</span>
+        )}
+        <GameSituation game={g} />
+      </div>
+
+      <FieldState game={g} />
+
+      {quarters && (
+        <div className="leg-stats">
+          {quarters.map((c) => <S key={c.k} k={c.k} v={c.v} />)}
+        </div>
+      )}
+
+      <RowTail leg={leg} showRemove={showRemove} onRemove={onRemove} />
+    </div>
+  );
+}
+
+function PctCell({ leg }: { leg: Bet }) {
+  const settled = ['WON', 'LOST', 'PUSH', 'VOID'].includes(leg.status);
+  const pct = leg.winProbability != null ? Math.round(leg.winProbability * 100) : null;
+  return (
+    <div className="leg-pct">
+      {settled
+        ? <span className={`leg-result ${leg.status}`}>{leg.status === 'WON' ? 'HIT' : leg.status === 'LOST' ? 'MISS' : leg.status}</span>
+        : <span className={pctTone(leg.status, pct)}>{pct != null ? `${pct}%` : '—'}</span>}
+    </div>
+  );
+}
+
+/** Every row ends the same way: the remove control and, once in, the HIT cover. */
+function RowTail({ leg, showRemove, onRemove }: { leg: Bet; showRemove: boolean; onRemove: () => void }) {
+  return (
+    <>
       {showRemove
         ? <button className="leg-rm" title="Remove leg" aria-label="Remove leg" onClick={onRemove}>×</button>
         : <span className="leg-rm-spacer" />}
@@ -311,7 +469,7 @@ function LegRow({
           <span>THIS LEG HIT!!!</span>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -325,6 +483,7 @@ function S({ k, v }: { k: string; v: number | string }) {
   return <span className="s"><i>{k}</i>{v}</span>;
 }
 
-function safeParse(json: string): StatsSnapshot | null {
-  try { return JSON.parse(json) as StatsSnapshot; } catch { return null; }
+function safeParse<T>(json: string | null): T | null {
+  if (!json) return null;
+  try { return JSON.parse(json) as T; } catch { return null; }
 }

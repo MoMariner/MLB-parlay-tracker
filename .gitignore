@@ -5,3 +5,6 @@ dist
 *.db-journal
 prisma/dev.db
 prisma/dev.db-journal
+
+# iCloud: .nosync keeps dependencies out of Desktop sync
+node_modules.nosync
