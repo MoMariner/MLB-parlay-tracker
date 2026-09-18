@@ -26,6 +26,13 @@ const TOTAL_SD = 13.5;
 /** ...of one team's points around its implied total. */
 const TEAM_SD = 9.7;
 const LEAGUE_TOTAL = 44.5;
+/** Share of a game's points that land in the first quarter. */
+const Q1_SHARE = 0.21;
+/** How often a score is a touchdown rather than a field goal. */
+const TD_SHARE = 0.55;
+const POINTS_PER_SCORE = TD_SHARE * 7 + (1 - TD_SHARE) * 3;
+/** Points one side can plausibly add in what's left of a quarter. */
+const MAX_QUARTER_POINTS = 35;
 
 function clockSeconds(clock: string | null): number {
   const m = clock?.match(/(\d{1,2}):(\d{2})/);
@@ -114,16 +121,107 @@ function pace(value: number, s: NflSnapshot): number | null {
   return Math.round(value / e);
 }
 
+/** P(N = k) for N ~ Poisson(lambda). */
+function poissonPmf(k: number, lambda: number): number {
+  let term = Math.exp(-lambda);
+  for (let i = 1; i <= k; i++) term *= lambda / i;
+  return term;
+}
+
+/**
+ * Points one team adds in the rest of a quarter: scores arrive Poisson, each
+ * worth 7 or 3. A normal curve can't do this job -- a quarter is short enough
+ * that 0-0 is ordinary, and it's that lump of probability sitting exactly on a
+ * tie that decides how often a first-quarter winner pushes.
+ */
+function quarterPointsPmf(expected: number): number[] {
+  const lambda = Math.max(expected, 0) / POINTS_PER_SCORE;
+  const pmf = new Array(MAX_QUARTER_POINTS + 1).fill(0);
+  for (let n = 0; n <= 8; n++) {
+    const pn = poissonPmf(n, lambda);
+    let choose = 1;
+    for (let k = 0; k <= n; k++) {
+      if (k > 0) choose = (choose * (n - k + 1)) / k;
+      const w = pn * choose * TD_SHARE ** k * (1 - TD_SHARE) ** (n - k);
+      pmf[Math.min(7 * k + 3 * (n - k), MAX_QUARTER_POINTS)] += w;
+    }
+  }
+  return pmf;
+}
+
+/** Share of one period still to play, 0..1. */
+function periodRemaining(s: NflSnapshot, period: number): number {
+  if (s.status === 'Preview') return 1;
+  if (s.status !== 'Live' || s.period == null) return 0;
+  if (s.period > period) return 0;
+  if (s.period < period) return 1;
+  return Math.min(1, Math.max(0, clockSeconds(s.clock) / 900));
+}
+
+/**
+ * First-quarter markets. The market total and spread give each side's expected
+ * points for the quarter; from there it's counting up every way the quarter
+ * can end.
+ */
+function quarterProbability(
+  leg: LegInput,
+  def: PropDef,
+  value: number,
+  s: NflSnapshot,
+  period: number,
+): NflProbability {
+  const isOver = leg.direction !== 'UNDER';
+  // Points the line hands the pick; see the full-game model above.
+  const cushion = def.handicap ? -leg.line : 0;
+  const f = periodRemaining(s, period);
+
+  // The quarter is done: it's on the board either way.
+  if (f <= 0) {
+    const won = def.sides === 'team'
+      ? value + cushion > 0
+      : isOver ? value > leg.line : value < leg.line;
+    return { probability: won ? 1 : 0, paceValue: null };
+  }
+
+  const total = s.marketTotal ?? LEAGUE_TOTAL;
+  const expectedHome = s.marketSpread != null ? -s.marketSpread : 0;
+  const share = Q1_SHARE * f;
+  const home = quarterPointsPmf(((total + expectedHome) / 2) * share);
+  const away = quarterPointsPmf(((total - expectedHome) / 2) * share);
+  const pickedHome = leg.teamId === s.homeTeamId;
+  const mine = pickedHome ? home : away;
+  const theirs = pickedHome ? away : home;
+
+  let p = 0;
+  for (let a = 0; a < mine.length; a++) {
+    if (mine[a] < 1e-9) continue;
+    for (let b = 0; b < theirs.length; b++) {
+      const w = mine[a] * theirs[b];
+      if (w < 1e-12) continue;
+      const wins = def.sides === 'team'
+        ? value + a - b + cushion > 0
+        : isOver ? value + a + b > leg.line : value + a + b < leg.line;
+      if (wins) p += w;
+    }
+  }
+  return { probability: clamp01(p), paceValue: null };
+}
+
 export async function nflLegProbability(
   leg: LegInput,
   def: PropDef,
   value: number,
   s: NflSnapshot,
 ): Promise<NflProbability> {
-  if (leg.status === 'WON') return { probability: 1, paceValue: pace(value, s) };
+  // Pace across a whole game says nothing about one quarter's scoring.
+  const paceValue = def.period != null ? null : pace(value, s);
+  if (leg.status === 'WON') return { probability: 1, paceValue };
   if (leg.status === 'LOST' || leg.status === 'PUSH' || leg.status === 'VOID') {
-    return { probability: 0, paceValue: pace(value, s) };
+    return { probability: 0, paceValue };
   }
+
+  // ---- First quarter ----
+  if (def.period != null) return quarterProbability(leg, def, value, s, def.period);
 
   const f = remainingFraction(s);
   const isOver = leg.direction !== 'UNDER';
@@ -132,14 +230,16 @@ export async function nflLegProbability(
   // ---- Spread and moneyline ----
   if (def.sides === 'team') {
     const pickedHome = leg.teamId === s.homeTeamId;
-    const spread = def.key === 'NFL_SPREAD' ? leg.line : 0;
-    if (f <= 0) return { probability: value + spread > 0 ? 1 : 0, paceValue: null };
+    // The line is the margin to beat, so the cushion it hands the pick is its
+    // negative: +2.5 has to win by 3, -2.5 can lose by 2.
+    const cushion = def.handicap ? -leg.line : 0;
+    if (f <= 0) return { probability: value + cushion > 0 ? 1 : 0, paceValue: null };
     const sd = MARGIN_SD * sdScale;
 
     // Live: anchor on ESPN's win probability for the home side.
     if (s.status === 'Live' && s.homeWinProb != null) {
       const z = normInv(Math.min(0.999, Math.max(0.001, s.homeWinProb)));
-      const p = pickedHome ? normCdf(z + spread / sd) : normCdf(spread / sd - z);
+      const p = pickedHome ? normCdf(z + cushion / sd) : normCdf(cushion / sd - z);
       return { probability: clamp01(p), paceValue: null };
     }
 
@@ -147,7 +247,7 @@ export async function nflLegProbability(
     const homeMargin = s.homeScore - s.awayScore;
     const expectedHome = s.marketSpread != null ? -s.marketSpread : 0;
     const meanHome = homeMargin + expectedHome * f;
-    const p = pickedHome ? normCdf((meanHome + spread) / sd) : normCdf((spread - meanHome) / sd);
+    const p = pickedHome ? normCdf((meanHome + cushion) / sd) : normCdf((cushion - meanHome) / sd);
     return { probability: clamp01(p), paceValue: null };
   }
 

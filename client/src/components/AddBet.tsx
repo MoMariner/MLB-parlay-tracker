@@ -6,7 +6,7 @@ import { GameSelect, SlateSelect } from './GameSelect';
 import { BetText } from './BetText';
 import { PlayerPhoto } from './PlayerPhoto';
 import { formatOdds, money, num, payoutFor, profitFor } from '../lib/format';
-import { describeLeg, formatSpread, legTextString, teamLogoFor } from '../lib/nfl';
+import { describeLeg, formatSpread, legTextString, spreadRequirement, teamAbbrev, teamLogoFor } from '../lib/nfl';
 
 const SOURCES = [
   { key: 'manual', label: 'Manual' },
@@ -42,10 +42,42 @@ function impliedTeamTotal(g: MlbGame, teamId: number): number | null {
   return Math.floor(pts) + 0.5;
 }
 
-/** The market spread from one team's side: LAR -3.5 is SF +3.5. */
+/**
+ * The market spread as this app writes it: the margin that team has to beat.
+ * ESPN prints a favourite as -5.5; here the favourite is +5.5 ("win by 5.5+")
+ * and the dog is -5.5 ("win or lose by <5.5").
+ */
 function teamSpread(g: MlbGame, teamId: number): number | null {
   if (g.marketSpread == null) return null;
-  return teamId === g.homeTeamId ? g.marketSpread : -g.marketSpread;
+  return teamId === g.homeTeamId ? -g.marketSpread : g.marketSpread;
+}
+
+/** Nearest half point, so a suggested line never lands on a number that pushes. */
+const halfPoint = (n: number) => (n >= 0 ? Math.floor(n) + 0.5 : -(Math.floor(-n) + 0.5));
+
+/** A first quarter is about a fifth of the scoring and a quarter of the spread. */
+function quarterTotal(g: MlbGame): number | null {
+  return g.marketTotal == null ? null : halfPoint(g.marketTotal * 0.21);
+}
+function quarterSpread(g: MlbGame, teamId: number): number | null {
+  const s = teamSpread(g, teamId);
+  return s == null ? null : halfPoint(s / 4);
+}
+
+/** Moneyline and quarter winner: pick a side, there's no number to set. */
+const noLine = (m: PropDef) => m.sides === 'team' && !m.handicap;
+
+/** The market's own number for one team, shown on its button. */
+function teamHint(m: PropDef, g: MlbGame, teamId: number): string {
+  if (m.handicap) {
+    const s = m.period ? quarterSpread(g, teamId) : teamSpread(g, teamId);
+    return s != null ? formatSpread(s) : '';
+  }
+  if (m.key === 'NFL_TEAM_TOTAL') {
+    const t = impliedTeamTotal(g, teamId);
+    return t != null ? `o/u ${num(t)}` : '';
+  }
+  return '';
 }
 
 /**
@@ -119,7 +151,9 @@ export function AddBet({ onAdded }: { onAdded: (parlay: Parlay) => void }) {
     setMode(next); resetPick(); setError(null);
   }
 
-  function pickPlayer(p: MlbPlayer) {
+  function pickPlayer(p: MlbPlayer, from: Sport = sport) {
+    // The search offers the other league's players when this one has no match.
+    if (from !== sport) switchSport(from);
     setPlayer(p); setGame(null); setProp(null); setLine(''); setError(null); setDone(null);
   }
 
@@ -135,15 +169,16 @@ export function AddBet({ onAdded }: { onAdded: (parlay: Parlay) => void }) {
   function pickMarket(m: PropDef) {
     setMarket(m); setTeamId(null); setDirection('OVER');
     if (m.key === 'NFL_GAME_TOTAL') setLine(String(lineGame?.marketTotal ?? middle(m.commonLines)));
-    else if (m.key === 'NFL_MONEYLINE') setLine('0');
+    else if (m.key === 'NFL_1Q_TOTAL') setLine(String((lineGame && quarterTotal(lineGame)) ?? middle(m.commonLines)));
+    else if (noLine(m)) setLine('0');
     else setLine('');
   }
 
   function pickTeam(id: number) {
     if (!lineGame || !market) return;
     setTeamId(id);
-    if (market.key === 'NFL_SPREAD') {
-      const s = teamSpread(lineGame, id);
+    if (market.handicap) {
+      const s = market.period ? quarterSpread(lineGame, id) : teamSpread(lineGame, id);
       setLine(s != null ? String(s) : '');
     } else if (market.key === 'NFL_TEAM_TOTAL') {
       const t = impliedTeamTotal(lineGame, id);
@@ -154,11 +189,11 @@ export function AddBet({ onAdded }: { onAdded: (parlay: Parlay) => void }) {
   const lineNum = Number(line);
   const lineIsNumber = line.trim() !== '' && Number.isFinite(lineNum);
   // Only a spread may be negative.
-  const lineValid = lineIsNumber && ((gameMode && market?.key === 'NFL_SPREAD') || lineNum >= 0);
+  const lineValid = lineIsNumber && ((gameMode && market?.handicap === true) || lineNum >= 0);
 
   const gameReady = gameMode && lineGame != null && market != null && (
     market.sides === 'team'
-      ? teamId != null && (market.key === 'NFL_MONEYLINE' || lineValid)
+      ? teamId != null && (noLine(market) || lineValid)
       : market.sides === 'teamOverUnder'
         ? teamId != null && lineValid
         : lineValid
@@ -172,7 +207,7 @@ export function AddBet({ onAdded }: { onAdded: (parlay: Parlay) => void }) {
       ? describeLeg(market, {
         betType: market.key,
         direction: market.sides === 'team' ? 'TEAM' : direction,
-        line: market.key === 'NFL_MONEYLINE' ? 0 : lineNum || 0,
+        line: noLine(market) ? 0 : lineNum || 0,
         teamId,
       }, lineGame)
       : null)
@@ -183,7 +218,7 @@ export function AddBet({ onAdded }: { onAdded: (parlay: Parlay) => void }) {
     let leg: SlipLeg;
     if (gameMode && lineGame && market) {
       const dir = market.sides === 'team' ? 'TEAM' : direction;
-      const ln = market.key === 'NFL_MONEYLINE' ? 0 : lineNum;
+      const ln = noLine(market) ? 0 : lineNum;
       leg = {
         key: `nfl-${lineGame.gamePk}-${market.key}-${teamId ?? 'game'}-${dir}-${ln}`,
         sport: 'nfl', player: null, game: lineGame, prop: market, direction: dir, line: ln, teamId,
@@ -274,8 +309,12 @@ export function AddBet({ onAdded }: { onAdded: (parlay: Parlay) => void }) {
     if (market.key === 'NFL_GAME_TOTAL') {
       return lineGame.marketTotal != null ? around(lineGame.marketTotal) : market.commonLines;
     }
-    if (market.key === 'NFL_SPREAD') {
-      const s = teamId != null ? teamSpread(lineGame, teamId) : null;
+    if (market.key === 'NFL_1Q_TOTAL') {
+      const t = quarterTotal(lineGame);
+      return t != null ? around(t) : market.commonLines;
+    }
+    if (market.handicap) {
+      const s = teamId != null ? (market.period ? quarterSpread(lineGame, teamId) : teamSpread(lineGame, teamId)) : null;
       return s != null ? around(s) : market.commonLines;
     }
     if (market.key === 'NFL_TEAM_TOTAL') {
@@ -360,11 +399,7 @@ export function AddBet({ onAdded }: { onAdded: (parlay: Parlay) => void }) {
                       { id: lineGame.homeTeamId, abbrev: lineGame.homeAbbrev },
                     ].map((t) => {
                       const logo = teamLogoFor(lineGame, t.id);
-                      const hint = market.key === 'NFL_SPREAD'
-                        ? (teamSpread(lineGame, t.id) != null ? formatSpread(teamSpread(lineGame, t.id) as number) : '')
-                        : market.key === 'NFL_TEAM_TOTAL'
-                          ? (impliedTeamTotal(lineGame, t.id) != null ? `o/u ${num(impliedTeamTotal(lineGame, t.id) as number)}` : '')
-                          : '';
+                      const hint = teamHint(market, lineGame, t.id);
                       return (
                         <button
                           key={t.id}
@@ -388,9 +423,9 @@ export function AddBet({ onAdded }: { onAdded: (parlay: Parlay) => void }) {
                   </div>
                 )}
 
-                {market.key !== 'NFL_MONEYLINE' && (market.sides === 'overUnder' || teamId != null) && (
+                {!noLine(market) && (market.sides === 'overUnder' || teamId != null) && (
                   <div className="field" style={{ marginBottom: 16 }}>
-                    <label>{market.key === 'NFL_SPREAD' ? 'SPREAD' : 'LINE'}</label>
+                    <label>{market.handicap ? 'SPREAD' : 'LINE'}</label>
                     <div className="line-row">
                       {gameChips.map((l) => (
                         <button
@@ -399,14 +434,21 @@ export function AddBet({ onAdded }: { onAdded: (parlay: Parlay) => void }) {
                           onClick={() => setLine(String(l))}
                           aria-label={`Line ${num(l)}`}
                           aria-pressed={lineNum === l}
-                        >{market.key === 'NFL_SPREAD' ? formatSpread(l) : num(l)}</button>
+                        >{market.handicap ? formatSpread(l) : num(l)}</button>
                       ))}
                       <input
                         className="input" style={{ width: 130 }} type="number" step="0.5"
-                        inputMode="decimal" value={line} placeholder={market.key === 'NFL_SPREAD' ? '-3.5' : '44.5'}
+                        inputMode="decimal" value={line} placeholder={market.handicap ? '2.5' : '44.5'}
                         onChange={(e) => setLine(e.target.value)}
                       />
                     </div>
+                    {/* Minus or plus is the one thing people read backwards. */}
+                    {market.handicap && teamId != null && lineIsNumber && (
+                      <span style={{ color: 'var(--muted)', fontSize: 12 }}>
+                        {teamAbbrev(lineGame, teamId)} {spreadRequirement(lineNum)}
+                        {market.period ? ` in Q${market.period}` : ''}
+                      </span>
+                    )}
                     {line.trim() !== '' && !lineValid && (
                       <span style={{ color: 'var(--lose)', fontSize: 12 }}>Enter a valid number.</span>
                     )}

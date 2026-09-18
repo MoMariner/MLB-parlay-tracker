@@ -167,6 +167,7 @@ input, select { font-family: inherit; }
 }
 
 .search-results { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.search-elsewhere { margin-top: 22px; font-size: 11px; letter-spacing: 0.13em; color: var(--muted); font-weight: 800; }
 
 .result-row {
   display: flex; align-items: center; gap: 14px; width: 100%; text-align: left;

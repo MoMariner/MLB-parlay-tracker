@@ -175,6 +175,8 @@ export interface PropDef {
   sport?: Sport;
   scope?: 'player' | 'game';
   sides?: 'overUnder' | 'team' | 'teamOverUnder';
+  handicap?: boolean;
+  period?: number;
   kind?: 'count' | 'yards' | 'long' | 'points';
   monotonic?: boolean;
 }

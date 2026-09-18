@@ -37,6 +37,10 @@ export interface PropDef {
    * or a team AND over/under (team total).
    */
   sides?: 'overUnder' | 'team' | 'teamOverUnder';
+  /** Team-sided markets whose line handicaps the margin, i.e. spreads. */
+  handicap?: boolean;
+  /** Only this period's scoring counts, e.g. 1 for first-quarter markets. */
+  period?: number;
   /** Shapes the win-probability model: counts, yardage, longest play, points. */
   kind?: 'count' | 'yards' | 'long' | 'points';
   /**
@@ -127,10 +131,18 @@ export const NFL_PROPS: PropDef[] = [
     commonLines: [40.5, 44.5, 48.5], help: 'Both teams combined' },
   { key: 'NFL_TEAM_TOTAL', label: 'Team Total',   short: 'TEAM TOTAL', category: 'game', sport: 'nfl', scope: 'game', sides: 'teamOverUnder', kind: 'points', monotonic: true,
     commonLines: [17.5, 20.5, 23.5, 27.5], help: 'One team\u2019s points' },
-  { key: 'NFL_SPREAD',     label: 'Spread',       short: 'SPREAD',     category: 'game', sport: 'nfl', scope: 'game', sides: 'team',          kind: 'points', monotonic: false,
-    commonLines: [-7.5, -3.5, -2.5, 2.5, 3.5, 7.5], help: 'Line is from the picked team\u2019s side, e.g. -3.5' },
+  { key: 'NFL_SPREAD',     label: 'Spread',       short: 'SPREAD',     category: 'game', sport: 'nfl', scope: 'game', sides: 'team', handicap: true, kind: 'points', monotonic: false,
+    commonLines: [-7.5, -3.5, -2.5, 2.5, 3.5, 7.5], help: 'The margin to beat: +2.5 wins by 3, -2.5 can lose by 2' },
   { key: 'NFL_MONEYLINE',  label: 'Moneyline',    short: 'ML',         category: 'game', sport: 'nfl', scope: 'game', sides: 'team',          kind: 'points', monotonic: false,
     commonLines: [0], help: 'Pick the winner' },
+
+  // ---- First quarter. Graded the moment Q1 ends, not at the final whistle. ----
+  { key: 'NFL_1Q_WINNER', label: '1st Quarter Winner', short: '1Q WIN',    category: 'game', sport: 'nfl', scope: 'game', sides: 'team', period: 1, kind: 'points', monotonic: false,
+    commonLines: [0], help: 'Most points in Q1; a tied quarter pushes' },
+  { key: 'NFL_1Q_SPREAD', label: '1st Quarter Spread', short: '1Q SPREAD', category: 'game', sport: 'nfl', scope: 'game', sides: 'team', handicap: true, period: 1, kind: 'points', monotonic: false,
+    commonLines: [-2.5, -1.5, -0.5, 0.5, 1.5, 2.5], help: 'Spread on Q1 scoring alone' },
+  { key: 'NFL_1Q_TOTAL',  label: '1st Quarter Total',  short: '1Q TOTAL',  category: 'game', sport: 'nfl', scope: 'game', sides: 'overUnder', period: 1, kind: 'points', monotonic: true,
+    commonLines: [7.5, 9.5, 10.5, 11.5], help: 'Both teams combined in Q1' },
 ];
 
 export const ALL_PROPS: PropDef[] = [...PROPS, ...NFL_PROPS];

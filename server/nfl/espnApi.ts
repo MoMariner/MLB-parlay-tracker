@@ -6,6 +6,8 @@
  * but Node's own fetch is accepted as-is -- so no custom headers are sent.
  */
 
+import { firstNameMatches, splitName, uniqueBy } from '../services/nameSearch.js';
+
 const SITE = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl';
 const WEB = 'https://site.web.api.espn.com/apis/common/v3';
 
@@ -145,6 +147,15 @@ export async function nflGetPlayer(id: number): Promise<NflPlayer | null> {
   return value;
 }
 
+/** One search request: NFL players only, in ESPN's relevance order. */
+async function espnSearch(query: string, limit: number): Promise<any[]> {
+  const data = await espnGet<any>(
+    `${WEB}/search?query=${encodeURIComponent(query)}&limit=${limit}&mode=prefix&type=player&sport=football&league=nfl`,
+    60_000,
+  );
+  return (data?.items ?? []).filter((i: any) => i.league === 'nfl' && i.type === 'player');
+}
+
 /**
  * Name search. The search index carries no position, so the top results are
  * enriched with a (cached) detail lookup -- the position badge is what tells
@@ -153,11 +164,18 @@ export async function nflGetPlayer(id: number): Promise<NflPlayer | null> {
 export async function nflSearchPlayers(query: string, limit = 8): Promise<NflPlayer[]> {
   const q = query.trim();
   if (q.length < 2) return [];
-  const data = await espnGet<any>(
-    `${WEB}/search?query=${encodeURIComponent(q)}&limit=${limit * 2}&mode=prefix&type=player&sport=football&league=nfl`,
-    60_000,
-  );
-  const items: any[] = (data?.items ?? []).filter((i: any) => i.league === 'nfl' && i.type === 'player');
+
+  // ESPN matches only the name as listed, so "matt stafford" misses Matthew
+  // Stafford. Search the surname too and keep the first names that fit.
+  const split = splitName(q);
+  const [direct, sameSurname] = await Promise.all([
+    espnSearch(q, limit * 2),
+    split ? espnSearch(split.surname, 50).catch(() => []) : [],
+  ]);
+  const nicknamed = split
+    ? sameSurname.filter((i) => firstNameMatches(split.first, [String(i.displayName ?? '').split(' ')[0]]))
+    : [];
+  const items = uniqueBy([...direct, ...nicknamed], (i) => String(i.id));
   // Active players first; retired ones rarely have a prop.
   items.sort((a, b) => Number(b.isActive !== false) - Number(a.isActive !== false));
 
@@ -182,7 +200,7 @@ export async function nflGetPlayerGames(id: number): Promise<NflGameCard[]> {
   if (!player?.teamId) return [];
   const data = await espnGet<any>(`${SITE}/teams/${player.teamId}/schedule`, 60_000);
   const now = Date.now();
-  return (data?.events ?? [])
+  const games: NflGameCard[] = (data?.events ?? [])
     .map(mapEvent)
     .filter((g: NflGameCard | null): g is NflGameCard => {
       if (!g) return false;
@@ -190,6 +208,18 @@ export async function nflGetPlayerGames(id: number): Promise<NflGameCard[]> {
       return t > now - 2 * 86_400_000 && t < now + 22 * 86_400_000;
     })
     .sort((a: NflGameCard, b: NflGameCard) => a.gameDate.localeCompare(b.gameDate));
+  if (!games.some((g) => g.status === 'Live')) return games;
+
+  // The team schedule leaves a game's score blank until it's final. The
+  // scoreboard has it live -- same URL and cache as the slate, so this is
+  // usually free.
+  const board = await espnGet<any>(`${SITE}/scoreboard`, 30_000).catch(() => null);
+  const live = new Map<number, NflGameCard>();
+  for (const e of board?.events ?? []) {
+    const g = mapEvent(e);
+    if (g) live.set(g.gamePk, g);
+  }
+  return games.map((g) => live.get(g.gamePk) ?? g);
 }
 
 /** The current week's slate, with market totals and spreads for game lines. */

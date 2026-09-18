@@ -236,3 +236,33 @@ export function extractNflLine(summary: any, athleteId: number): NflLine {
     },
   };
 }
+
+function parseLinescores(json: string | null): number[] {
+  if (!json) return [];
+  try {
+    const xs = JSON.parse(json);
+    return Array.isArray(xs) ? xs.map((x) => Number(x) || 0) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * What each side scored in one period, or null before it kicks off.
+ *
+ * ESPN posts a linescore per quarter; while one is being played the running
+ * score minus the quarters already banked is that quarter's score, which is
+ * how a first-quarter bet tracks live before the linescore exists.
+ */
+export function periodScore(s: NflSnapshot, period: number): { home: number; away: number } | null {
+  const home = parseLinescores(s.homeLinescores);
+  const away = parseLinescores(s.awayLinescores);
+  if (home.length >= period && away.length >= period) {
+    return { home: home[period - 1], away: away[period - 1] };
+  }
+  if (s.status === 'Live' && s.period === period) {
+    const banked = (xs: number[]) => xs.slice(0, period - 1).reduce((a, b) => a + b, 0);
+    return { home: s.homeScore - banked(home), away: s.awayScore - banked(away) };
+  }
+  return null;
+}

@@ -11,6 +11,7 @@
 
 import type { PropDef, BetStatus } from '../../shared/props.js';
 import type { NflLine, NflSnapshot } from './stats.js';
+import { periodScore } from './stats.js';
 import { scoreNflFantasy } from './fantasy.js';
 
 /** Scoring plays that pay an anytime-TD bet. Passing TDs go to the receiver. */
@@ -27,6 +28,13 @@ export function anytimeTouchdowns(l: NflLine): number {
 /** Scoreboard margin from the picked team's side; positive means ahead. */
 export function marginFor(teamId: number | null, s: NflSnapshot): number {
   return teamId === s.homeTeamId ? s.homeScore - s.awayScore : s.awayScore - s.homeScore;
+}
+
+/** Margin in one period from the picked team's side; 0 before it starts. */
+function periodMargin(teamId: number | null, s: NflSnapshot, period: number): number {
+  const q = periodScore(s, period);
+  if (!q) return 0;
+  return teamId === s.homeTeamId ? q.home - q.away : q.away - q.home;
 }
 
 export function nflValue(
@@ -72,6 +80,13 @@ export function nflValue(
     case 'NFL_SPREAD':
     case 'NFL_MONEYLINE':  return marginFor(teamId, s);
 
+    case 'NFL_1Q_WINNER':
+    case 'NFL_1Q_SPREAD':  return periodMargin(teamId, s, 1);
+    case 'NFL_1Q_TOTAL': {
+      const q = periodScore(s, 1);
+      return q ? q.home + q.away : 0;
+    }
+
     default: throw new Error(`Unknown NFL prop: ${betType}`);
   }
 }
@@ -95,13 +110,21 @@ export function evaluateNflLeg(
   // A postponed or cancelled game voids the leg rather than grading it.
   if (s.status === 'Other') return { currentValue: value, status: 'VOID', progress: 0, target: bet.line };
 
-  // ---- Spread and moneyline: pick a side ----
+  // A quarter market is graded the moment that quarter ends; everything else
+  // waits for the final whistle.
+  const settled = def.period != null
+    ? s.status === 'Final' || (s.period ?? 0) > def.period
+    : s.status === 'Final';
+
+  // ---- Spread, moneyline and quarter winner: pick a side ----
   if (def.sides === 'team') {
-    const line = def.key === 'NFL_SPREAD' ? bet.line : 0;
-    const cover = value + line;
-    const target = -line;
+    // A spread's line is the margin the pick has to beat: +2.5 has to win by
+    // 3, -2.5 can lose by 2. A moneyline just has to win, so its line is 0.
+    const line = def.handicap ? bet.line : 0;
+    const cover = value - line;
+    const target = line;
     if (s.status === 'Preview') return { currentValue: value, status: 'PENDING', progress: 0, target };
-    if (s.status === 'Final') {
+    if (settled) {
       const status: BetStatus = cover > 0 ? 'WON' : cover < 0 ? 'LOST' : 'PUSH';
       return { currentValue: value, status, progress: cover > 0 ? 1 : 0, target };
     }
@@ -117,7 +140,7 @@ export function evaluateNflLeg(
 
   if (s.status === 'Preview') return { currentValue: value, status: 'PENDING', progress: 0, target };
 
-  if (s.status === 'Final') {
+  if (settled) {
     const status: BetStatus =
       value > bet.line ? (isOver ? 'WON' : 'LOST')
       : value < bet.line ? (isOver ? 'LOST' : 'WON')

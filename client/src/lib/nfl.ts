@@ -13,6 +13,18 @@ export function formatSpread(n: number): string {
   return n > 0 ? `+${num(n)}` : `\u2212${num(Math.abs(n))}`;
 }
 
+/**
+ * What a spread actually asks for, in words. Books print "-2.5" and a bettor
+ * thinks "win by 3"; the sign is the part people read backwards, so the app
+ * spells the requirement out rather than showing a signed number alone.
+ */
+export function spreadRequirement(line: number): string {
+  if (line === 0) return 'Win outright';
+  // A whole-number line pushes on the number itself, so it takes one more.
+  if (line > 0) return `Win by ${num(Number.isInteger(line) ? line + 1 : line)}+`;
+  return `Win or lose by <${num(-line)}`;
+}
+
 type TeamSides = { homeTeamId: number; homeAbbrev: string; awayAbbrev: string };
 
 export function teamAbbrev(g: TeamSides | undefined, teamId: number | null): string {
@@ -48,9 +60,12 @@ export function describeLeg(
   const tone = leg.direction === 'UNDER' ? 'under' : 'over';
   const team = teamAbbrev(g, leg.teamId);
   switch (prop?.key) {
-    case 'NFL_SPREAD':     return { side: team, tone: 'team', line: formatSpread(leg.line), label: 'Spread' };
+    case 'NFL_SPREAD':     return { side: team, tone: 'team', line: spreadRequirement(leg.line), label: '' };
     case 'NFL_MONEYLINE':  return { side: team, tone: 'team', line: '', label: 'Moneyline' };
     case 'NFL_TEAM_TOTAL': return { side: `${team} ${ou}`, tone, line: num(leg.line), label: 'Team Total' };
+    case 'NFL_1Q_WINNER':  return { side: team, tone: 'team', line: '', label: 'Wins 1st Quarter' };
+    case 'NFL_1Q_SPREAD':  return { side: team, tone: 'team', line: spreadRequirement(leg.line), label: 'in Q1' };
+    case 'NFL_1Q_TOTAL':   return { side: ou, tone, line: num(leg.line), label: '1st Quarter Points' };
     case 'NFL_ANYTIME_TD':
       // "Over 0.5 Anytime Touchdown" is how a database says it, not a bettor.
       if (leg.direction !== 'UNDER') {
@@ -113,15 +128,17 @@ export function fieldStatusMeta(status: string | null, category?: PropCategory):
 /** "Covering by 3.5", "Needs 2 more to cover", "Leads by 7". */
 export function marginNote(prop: PropDef | undefined, leg: Pick<Bet, 'currentValue' | 'line' | 'game'>): string | null {
   if (leg.game.status !== 'Live' && leg.game.status !== 'Final') return null;
-  if (prop?.key === 'NFL_SPREAD') {
-    const cover = leg.currentValue + leg.line;
-    if (cover > 0) return `Covering by ${num(cover)}`;
-    if (cover < 0) return `Needs ${num(-cover)} more to cover`;
+  // A quarter market counts only its own quarter's points.
+  const where = prop?.period ? ` in Q${prop.period}` : '';
+  if (prop?.key === 'NFL_SPREAD' || prop?.key === 'NFL_1Q_SPREAD') {
+    const cover = leg.currentValue - leg.line;
+    if (cover > 0) return `Covering by ${num(cover)}${where}`;
+    if (cover < 0) return `Needs ${num(-cover)} more to cover${where}`;
     return 'Right on the number';
   }
-  if (prop?.key === 'NFL_MONEYLINE') {
+  if (prop?.key === 'NFL_MONEYLINE' || prop?.key === 'NFL_1Q_WINNER') {
     const m = leg.currentValue;
-    return m > 0 ? `Leads by ${num(m)}` : m < 0 ? `Trails by ${num(-m)}` : 'Tied';
+    return m > 0 ? `Leads by ${num(m)}${where}` : m < 0 ? `Trails by ${num(-m)}${where}` : `Tied${where}`;
   }
   return null;
 }

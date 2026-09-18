@@ -111,7 +111,7 @@ parlaysRouter.post('/', async (req, res) => {
             betType: leg.betType,
             source,
             direction: leg.direction,
-            line: def.key === 'NFL_MONEYLINE' ? 0 : Number(leg.line ?? 0),
+            line: def.sides === 'team' && !def.handicap ? 0 : Number(leg.line ?? 0),
             status: snapshot.status === 'Preview' ? 'PENDING' : 'LIVE',
           })),
         },

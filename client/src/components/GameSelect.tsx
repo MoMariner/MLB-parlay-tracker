@@ -13,6 +13,10 @@ function GameCard({
   const liveState = sport === 'nfl'
     ? quarterLabel({ status: g.status, period: g.period, clock: g.clock, detailedState: g.detailedState })
     : g.inning ? `${g.inningState ?? ''} ${ordinalInning(g.inning)}`.toUpperCase() : '';
+  // A missing score is unknown, not 0-0 -- the card shows the clock alone.
+  const score = g.awayScore != null && g.homeScore != null
+    ? `${g.awayAbbrev} ${g.awayScore} — ${g.homeAbbrev} ${g.homeScore}`
+    : '';
 
   return (
     <button
@@ -41,14 +45,9 @@ function GameCard({
       <div className="teams">{g.awayName} vs {g.homeName}</div>
 
       <div className="when">
-        {isLive || isFinal ? (
-          <>
-            {g.awayAbbrev} {g.awayScore ?? 0} — {g.homeAbbrev} {g.homeScore ?? 0}
-            {isLive && liveState ? ` · ${liveState}` : ''}
-          </>
-        ) : (
-          gameTime(g.gameDate)
-        )}
+        {isLive || isFinal
+          ? [score, isLive ? liveState : ''].filter(Boolean).join(' · ')
+          : gameTime(g.gameDate)}
       </div>
 
       {sport === 'nfl' && (g.marketTotal != null || g.oddsDetails) && (

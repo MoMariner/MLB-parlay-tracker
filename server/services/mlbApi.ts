@@ -5,6 +5,8 @@
  * one game don't hammer statsapi.
  */
 
+import { firstNameMatches, splitName, uniqueBy } from './nameSearch.js';
+
 const BASE = 'https://statsapi.mlb.com/api';
 
 export interface MlbPlayer {
@@ -125,6 +127,14 @@ function mapPerson(p: any): MlbPlayer {
   };
 }
 
+async function peopleSearch(names: string): Promise<any[]> {
+  const data = await getJson<{ people?: any[] }>(
+    `/v1/people/search?names=${encodeURIComponent(names)}&sportIds=1&hydrate=currentTeam&limit=60`,
+    60_000,
+  );
+  return data.people ?? [];
+}
+
 /**
  * Spec §1 -- name search. The upstream endpoint also returns retired players
  * and minor leaguers, so active big-leaguers are floated to the top and the
@@ -134,12 +144,19 @@ export async function searchPlayers(query: string, limit = 12): Promise<MlbPlaye
   const q = query.trim();
   if (q.length < 2) return [];
 
-  const data = await getJson<{ people?: any[] }>(
-    `/v1/people/search?names=${encodeURIComponent(q)}&sportIds=1&hydrate=currentTeam&limit=60`,
-    60_000,
-  );
+  // MLB indexes the name a player goes by, so "michael trout" misses Mike
+  // Trout. Search the surname too, matching the typed first name against both
+  // the legal one and the one the player uses.
+  const split = splitName(q);
+  const [direct, sameSurname] = await Promise.all([
+    peopleSearch(q),
+    split ? peopleSearch(split.surname).catch(() => []) : [],
+  ]);
+  const nicknamed = split
+    ? sameSurname.filter((p) => firstNameMatches(split.first, [p.firstName, p.useName]))
+    : [];
 
-  const people = (data.people ?? []).map(mapPerson);
+  const people = uniqueBy([...direct, ...nicknamed], (p) => p.id).map(mapPerson);
   const lower = q.toLowerCase();
 
   const ranked = people
