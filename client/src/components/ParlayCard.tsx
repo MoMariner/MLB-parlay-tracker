@@ -34,6 +34,10 @@ export function ParlayCard({
 
   // The headline number is the SLIP's chance, not any one leg's.
   const pct = parlay.winProbability != null ? Math.round(parlay.winProbability * 1000) / 10 : null;
+  // Legs on one game rise and fall together, so the slip is worth more than
+  // its legs multiplied -- worth saying, because the number no longer
+  // multiplies out on the card.
+  const sameGame = legs.length > 1 && new Set(legs.map((b) => b.gameKey)).size < legs.length;
 
   const profit = slipProfit(parlay.stake, parlay.odds, parlay.payout);
   const totalReturn = slipPayout(parlay.stake, parlay.odds, parlay.payout);
@@ -66,6 +70,7 @@ export function ParlayCard({
             <div className={`win-pct ${pctTone(parlay.status, pct)}`}>
               {settled ? parlay.status : pct != null ? `${pct}%` : '—'}
             </div>
+            {!settled && sameGame && <div className="corr-note">SAME GAME · CORRELATED</div>}
           </div>
         </div>
 

@@ -10,6 +10,7 @@ import { nflValue, evaluateNflLeg } from '../server/nfl/evaluator.js';
 import { nflLegProbability, remainingFraction, normCdf, normInv, poissonCdf } from '../server/nfl/winProbability.js';
 import { firstNameMatches, splitName } from '../server/services/nameSearch.js';
 import { spreadRequirement } from '../client/src/lib/nfl.js';
+import { correlatedParlayProbability, type CorrelatedLeg } from '../server/services/correlation.js';
 import { PROP_BY_KEY } from '../shared/props.js';
 
 let pass = 0, fail = 0;
@@ -68,7 +69,10 @@ const ev = (betType: string, dir: string, line: number, value: number, snap: Nfl
   evaluateNflLeg({ betType, direction: dir, line }, PROP_BY_KEY[betType]!, value, snap).status;
 
 console.log('\n  Live settlement rules:');
-check('rec yds over 49.5 at 60, live -> stays LIVE (can drop)', ev('NFL_REC_YARDS', 'OVER', 49.5, 60, live({})), 'LIVE');
+check('rec yds over 49.5 at 60, live -> WON (10.5 clear)', ev('NFL_REC_YARDS', 'OVER', 49.5, 60, live({})), 'WON');
+check('rec yds over 49.5 at 52, live -> LIVE (a loss still takes it back)', ev('NFL_REC_YARDS', 'OVER', 49.5, 52, live({})), 'LIVE');
+check('rec yds under 49.5 at 60, live -> LOST', ev('NFL_REC_YARDS', 'UNDER', 49.5, 60, live({})), 'LOST');
+check('rush yds over 25.5 at 40, live -> WON', ev('NFL_RUSH_YARDS', 'OVER', 25.5, 40, live({})), 'WON');
 check('receptions over 4.5 at 5, live -> WON (only goes up)', ev('NFL_RECEPTIONS', 'OVER', 4.5, 5, live({})), 'WON');
 check('spread, live -> LIVE whatever the margin', ev('NFL_SPREAD', 'TEAM', 3, 21, live({})), 'LIVE');
 check('pregame -> PENDING', ev('NFL_RUSH_YARDS', 'OVER', 49.5, 0, live({ status: 'Preview' })), 'PENDING');
@@ -148,6 +152,31 @@ check("pick'em: both sides of Q1 are equal", await prob('NFL_1Q_WINNER', 'TEAM',
 check('Q1 total over + under = 1 on a half point', await prob('NFL_1Q_TOTAL', 'OVER', 9.5, 0, pre)
   + await prob('NFL_1Q_TOTAL', 'UNDER', 9.5, 0, pre), 1, 0.001);
 check('once Q1 is over the winner is settled at 100%', await prob('NFL_1Q_WINNER', 'TEAM', 0, 7, inQ2, SEA), 1, 0.0001);
+
+console.log('\n  Same-game correlation:');
+const cleg = (o: Partial<CorrelatedLeg>): CorrelatedLeg => ({
+  id: 'leg', probability: 0.5, betType: 'NFL_SPREAD', direction: 'TEAM',
+  gameKey: 'nfl:1', teamId: SEA, playerKey: null, homeTeamId: SEA, awayTeamId: NE, ...o,
+});
+const pair = (a: Partial<CorrelatedLeg>, b: Partial<CorrelatedLeg>) =>
+  correlatedParlayProbability([cleg({ id: 'a', ...a }), cleg({ id: 'b', ...b })]);
+check('legs in different games multiply exactly',
+  pair({ probability: 0.5 }, { probability: 0.4, gameKey: 'nfl:2' }), 0.2, 1e-9);
+check('a certain partner leaves the other leg where it was',
+  pair({ probability: 0.45 }, { probability: 1, betType: 'NFL_MONEYLINE' }), 0.45, 0.015);
+const sameSide = pair({ probability: 0.6 }, { probability: 0.6, betType: 'NFL_1Q_WINNER' });
+check('same team, spread + 1st quarter, beats the product', sameSide > 0.36, true);
+check('...but never beats its own weakest leg', sameSide <= 0.6, true);
+check('opposite sides of one game fall below the product',
+  pair({ probability: 0.6 }, { probability: 0.5, betType: 'NFL_MONEYLINE', teamId: NE }) < 0.3, true);
+check('a quarterback and his receiver beat the product',
+  pair({ probability: 0.5, betType: 'NFL_PASS_YARDS', direction: 'OVER', playerKey: 'nfl:1' },
+       { probability: 0.4, betType: 'NFL_REC_YARDS', direction: 'OVER', playerKey: 'nfl:2' }) > 0.2, true);
+check('an under on a correlated stat pulls the other way',
+  pair({ probability: 0.5, betType: 'NFL_PASS_YARDS', direction: 'OVER', playerKey: 'nfl:1' },
+       { probability: 0.4, betType: 'NFL_REC_YARDS', direction: 'UNDER', playerKey: 'nfl:2' }) < 0.2, true);
+check('the same slip prices the same twice running',
+  pair({ probability: 0.6 }, { probability: 0.6, betType: 'NFL_1Q_WINNER' }) === sameSide, true);
 
 console.log('\n  Spread wording matches how it grades:');
 check('+2.5 reads as winning by 2.5+', spreadRequirement(2.5), 'Win by 2.5+');

@@ -4,7 +4,7 @@
  */
 
 import { prisma } from '../db.js';
-import { parlayProbability } from './winProbability.js';
+import { correlatedParlayProbability, type CorrelatedLeg } from './correlation.js';
 import { PROP_BY_KEY } from '../../shared/props.js';
 
 /** Samples kept per slip -- enough for a readable sparkline, not a log. */
@@ -24,9 +24,13 @@ export interface ParlayRollup {
  * waiting for the other games to finish.
  * PUSH/VOID legs drop out of the slip rather than sinking it.
  */
-export function rollUp(
-  legs: { status: string; winProbability: number | null }[],
-): ParlayRollup {
+type RollupLeg = Omit<CorrelatedLeg, 'probability' | 'homeTeamId' | 'awayTeamId'> & {
+  status: string;
+  winProbability: number | null;
+  game: { homeTeamId: number; awayTeamId: number };
+};
+
+export function rollUp(legs: RollupLeg[]): ParlayRollup {
   if (legs.length === 0) return { status: 'PENDING', winProbability: 0 };
 
   if (legs.some((l) => l.status === 'LOST')) return { status: 'LOST', winProbability: 0 };
@@ -37,9 +41,19 @@ export function rollUp(
   if (live.every((l) => l.status === 'WON')) return { status: 'WON', winProbability: 1 };
 
   const status = live.every((l) => l.status === 'PENDING') ? 'PENDING' : 'LIVE';
-  const probability = parlayProbability(
-    live.map((l) => (l.status === 'WON' ? 1 : l.winProbability ?? 0)),
-  );
+  // Legs that share a game move together, so the slip is worth more than the
+  // product of its legs -- see correlation.ts.
+  const probability = correlatedParlayProbability(live.map((l) => ({
+    id: l.id,
+    probability: l.status === 'WON' ? 1 : l.winProbability ?? 0,
+    betType: l.betType,
+    direction: l.direction,
+    gameKey: l.gameKey,
+    teamId: l.teamId,
+    playerKey: l.playerKey,
+    homeTeamId: l.game.homeTeamId,
+    awayTeamId: l.game.awayTeamId,
+  })));
   return { status, winProbability: probability };
 }
 

@@ -14,6 +14,14 @@ import type { NflLine, NflSnapshot } from './stats.js';
 import { periodScore } from './stats.js';
 import { scoreNflFantasy } from './fantasy.js';
 
+/**
+ * How far clear of its line a yardage bet has to be before it's called.
+ * Yards can come back -- a run for a loss -- but not five of them without a
+ * carry going the other way, and every settled football leg is re-checked
+ * until the whistle in case it does.
+ */
+const YARDS_CLEAR = 5;
+
 /** Scoring plays that pay an anytime-TD bet. Passing TDs go to the receiver. */
 export function anytimeTouchdowns(l: NflLine): number {
   return (
@@ -150,6 +158,12 @@ export function evaluateNflLeg(
 
   // Only a stat that can't come back down may clear an over mid-game.
   if (def.monotonic && value > bet.line) {
+    return { currentValue: value, status: isOver ? 'WON' : 'LOST', progress: 1, target };
+  }
+
+  // Yardage isn't monotonic, but a bet sitting this far past its line is in,
+  // and reading "live" next to 40 yards on a 25.5 line helps nobody.
+  if (def.kind === 'yards' && value >= bet.line + YARDS_CLEAR) {
     return { currentValue: value, status: isOver ? 'WON' : 'LOST', progress: 1, target };
   }
 

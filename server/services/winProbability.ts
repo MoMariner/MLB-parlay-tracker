@@ -304,12 +304,3 @@ function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
-/**
- * A slip wins only if every leg wins, so multiply. Legs in the same game are
- * positively correlated and this understates those slightly -- flagged in the
- * UI rather than silently fudged.
- */
-export function parlayProbability(legProbabilities: number[]): number {
-  if (legProbabilities.length === 0) return 0;
-  return legProbabilities.reduce((acc, p) => acc * p, 1);
-}
